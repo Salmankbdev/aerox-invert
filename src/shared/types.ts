@@ -21,6 +21,7 @@ export type SettingKey =
   | 'batteryRedischargeVoltage'
   | 'maxChargingCurrent'
   | 'maxAcChargingCurrent'
+  | 'outputVoltage'
   | 'outputFrequency'
 
 export interface DeviceInfo {

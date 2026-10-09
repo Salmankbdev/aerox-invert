@@ -42,6 +42,17 @@ const int = (width: number) => (value: number): string =>
 /** `dd.d` - the voltage setters reject anything else, including `14.10`. */
 const volts = (value: number): string => value.toFixed(1).padStart(4, '0')
 
+/**
+ * `nnn` - whole volts, no decimal point (`V230`).
+ *
+ * The output-voltage setter is defined by Voltronic's own Axpert MAX protocol
+ * document (`V<nnn>`) but is *not* in mpp-solar's `pi30.py`, which is where
+ * every other verb in this table comes from. Whole volts with a fixed width is
+ * the documented framing, so that is what this encodes; whether this firmware
+ * accepts it at all is unconfirmed until the unit ACKs it.
+ */
+const volts3 = (value: number): string => String(Math.round(value)).padStart(3, '0')
+
 const opt = (values: Array<[number, string]>): SettingOption[] =>
   values.map(([value, label]) => ({ value, label }))
 
@@ -259,6 +270,18 @@ export const SETTING_SPECS: readonly SettingSpec[] = [
     options: UTILITY_CHARGE_CURRENTS,
     help: 'Charge current drawn from the grid.',
     encode: int(3)
+  },
+  {
+    key: 'outputVoltage',
+    command: 'V',
+    label: 'Output voltage',
+    kind: 'number',
+    unit: 'V',
+    min: 200,
+    max: 240,
+    step: 1,
+    help: 'What the inverter puts out. Leave it alone unless you know your appliances need something else.',
+    encode: volts3
   },
   {
     key: 'outputFrequency',

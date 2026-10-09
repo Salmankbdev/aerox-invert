@@ -283,7 +283,7 @@ testing the raw `num()` result, which reports "no value" as `NaN`.
 `QPI` (protocol ID → returns `(PI30`), `QPIGS`, `QPIRI`, `QMOD`, `QPIWS`, `QVFW`, `QID`,
 `QMN`, `QDI`, `QFLAG`. The handshake also tries the legacy `QS` / `QGS` / `Q` for the
 older "voltronic-qs" dialect. Writes use `POP` / `PCP` / `PGR` / `PBT` / `PCVV` / `PBFT` /
-`PBCV` / `PSDV` / `PBDV` / `MCHGC` / `MUCHGC` / `F` and `PSAVE` - see below.
+`PBCV` / `PSDV` / `PBDV` / `MCHGC` / `MUCHGC` / `V` / `F` and `PSAVE` - see below.
 
 ### Writing settings
 
@@ -305,11 +305,12 @@ so the UI and the encoder cannot drift apart:
 | batteryRedischargeVoltage | `PBDV` | `dd.d` | 00.0 (full) or 11.0 - 14.5 V |
 | maxChargingCurrent | `MCHGC` | `ddd` | 10 - 120 A in tens |
 | maxAcChargingCurrent | `MUCHGC` | `ddd` | 2 A, then 10 - 120 A in tens |
+| outputVoltage | `V` | `nnn` | 200 - 240 V |
 | outputFrequency | `F` | none | `50` or `60` |
 
 `command + argument` are concatenated with no separator, so the exact bytes matter:
-`POP02`, `PCVV14.4`, `MCHGC060`, `F60`. A wrong width is not close enough - the firmware
-answers `(NAK`.
+`POP02`, `PCVV14.4`, `MCHGC060`, `V230`, `F60`. A wrong width is not close enough - the
+firmware answers `(NAK`.
 
 The flow is: renderer sends `{ key, value }` over `IPC.setSetting` →
 `buildSettingCommand()` validates the range **and** the allowed-value list in the main
@@ -326,6 +327,14 @@ the panel exposes as **save to EEPROM**.
 > shows up as a NAK rather than silently succeeding. The editor also never guesses:
 > each control is preselected from the `QPIRI` snapshot, and `batteryType` values the
 > inverter reports but `PBT` cannot express (Pylontech, WECO, ...) leave the control blank.
+>
+> `V` (output voltage) is the single verb in this table **not** sourced from mpp-solar's
+> `protocols/pi30.py` - mpp-solar does not define it at all. It comes from Voltronic's own
+> Axpert MAX protocol document (`V<nnn>`, answered with `(ACK`), so whether this PI30
+> firmware accepts it is unconfirmed until the unit is connected and ACKs it. The control is
+> held to 200 - 240 V as a guard against nonsense input; a refusal still surfaces as an inline
+> NAK. `QPIRI` field 3 reports AC output voltage back, so the write-then-re-read flow shows
+> what the unit actually took.
 
 ---
 

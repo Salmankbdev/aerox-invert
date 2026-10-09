@@ -19,177 +19,223 @@ const app = document.getElementById('app')
 if (!app) throw new Error('#app missing')
 
 app.innerHTML = `
-<header class="top">
-  <div class="brand">
-    <span class="brand__mark">AEROX</span>
-    <span class="brand__model">1.2KW · INVEREX</span>
-  </div>
-  <div class="pills">
-    <span class="pill" id="pill-connection">disconnected</span>
-    <span class="pill pill--muted" id="pill-dialect">dialect —</span>
-    <span class="pill pill--muted" id="pill-link">link —</span>
-    <span class="pill pill--muted" id="pill-protocol">—</span>
-  </div>
-  <div class="meta" id="meta">waiting for device</div>
-</header>
+<div class="app">
+  <header class="appbar">
+    <div class="appbar__brand">
+      <span class="appbar__mark">AEROX</span>
+      <span class="appbar__sub">Inverex 1.2 kW solar inverter</span>
+    </div>
+    <span class="status-chip" id="pill-connection" data-tone="absent">Not connected</span>
+  </header>
 
-<div class="notice" id="notice" hidden></div>
+  <div class="notice" id="notice" hidden></div>
 
-<main>
-  <section class="hero">
-    <article class="hero__card" data-tone="pv">
-      <h2>PV power</h2>
-      <p class="value"><span data-f="pv-power">—</span><small>W</small></p>
-      <p class="sub"><span data-f="pv-voltage">—</span> V · <span data-f="pv-current">—</span> A</p>
-      <div class="bar"><i data-b="pv"></i></div>
-    </article>
-    <article class="hero__card" data-tone="batt">
-      <h2>Battery</h2>
-      <p class="value"><span data-f="batt-voltage">—</span><small>V</small></p>
-      <p class="sub"><span data-f="batt-current">—</span> A in · <span data-f="batt-discharge">—</span> A out</p>
-      <div class="bar"><i data-b="batt"></i></div>
-    </article>
-    <article class="hero__card" data-tone="load">
-      <h2>Load</h2>
-      <p class="value"><span data-f="load-power">—</span><small>W</small></p>
-      <p class="sub"><span data-f="load-percent">—</span> % · <span data-f="load-va">—</span> VA</p>
-      <div class="bar"><i data-b="load"></i></div>
-    </article>
-    <article class="hero__card" data-tone="ac">
-      <h2>AC output</h2>
-      <p class="value"><span data-f="ac-voltage">—</span><small>V</small></p>
-      <p class="sub"><span data-f="ac-frequency">—</span> Hz · <span data-f="ac-mode">—</span></p>
-      <div class="bar"><i data-b="ac"></i></div>
-    </article>
-  </section>
+  <main class="page">
+    <section class="status" id="status-banner" data-tone="idle">
+      <div class="status__text">
+        <h1 class="status__headline" id="status-headline">Starting up…</h1>
+        <p class="status__detail" id="status-detail">Looking for the inverter.</p>
+      </div>
+      <div class="status__state">
+        <span class="status__state-label">Inverter state</span>
+        <span class="status__state-value" id="ac-mode">—</span>
+      </div>
+    </section>
 
-  <section class="row row--analytics">
-    <div class="panel panel--health">
-      <h3>Battery health <span class="panel__hint" id="health-verdict">—</span></h3>
-      <div class="health">
-        <div class="health__score">
-          <span class="health__number" id="health-score">—</span>
-          <span class="health__unit">/100</span>
-          <div class="bar bar--tall"><i id="health-bar" style="background:var(--ok)"></i></div>
+    <section class="metrics">
+      <article class="metric" data-tone="pv">
+        <h2>Solar power</h2>
+        <p class="metric__value"><span data-f="pv-power">—</span><small>W</small></p>
+        <p class="metric__sub">
+          Panels <span data-f="pv-voltage">—</span> V · <span data-f="pv-current">—</span> A
+        </p>
+        <div class="bar"><i data-b="pv"></i></div>
+      </article>
+      <article class="metric" data-tone="batt">
+        <h2>Battery</h2>
+        <p class="metric__value"><span data-f="batt-percent">—</span><small>%</small></p>
+        <p class="metric__sub">
+          <span data-f="batt-voltage">—</span> V · charging <span data-f="batt-current">—</span> A ·
+          drawing <span data-f="batt-discharge">—</span> A
+        </p>
+        <div class="bar"><i data-b="batt"></i></div>
+      </article>
+      <article class="metric" data-tone="load">
+        <h2>Power used</h2>
+        <p class="metric__value"><span data-f="load-power">—</span><small>W</small></p>
+        <p class="metric__sub">
+          <span data-f="load-percent">—</span>% of capacity · <span data-f="load-va">—</span> VA
+        </p>
+        <div class="bar"><i data-b="load"></i></div>
+      </article>
+      <article class="metric" data-tone="ac">
+        <h2>Power to your home</h2>
+        <p class="metric__value"><span data-f="ac-voltage">—</span><small>V</small></p>
+        <p class="metric__sub"><span data-f="ac-frequency">—</span> Hz</p>
+        <div class="bar"><i data-b="ac"></i></div>
+      </article>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <h3>Battery condition <span class="card__hint" id="health-verdict">—</span></h3>
+        <div class="score">
+          <div class="score__dial">
+            <span class="score__number" id="health-score">—</span>
+            <span class="score__unit">out of 100</span>
+            <div class="bar bar--tall"><i id="health-bar" style="background:var(--ok)"></i></div>
+          </div>
+          <dl class="stats">
+            <div><dt>Charge from voltage</dt><dd id="soc-voltage">—</dd></div>
+            <div><dt>Charge from inverter</dt><dd id="soc-reported">—</dd></div>
+            <div><dt>Difference</dt><dd id="soc-delta">—</dd></div>
+            <div><dt>Lowest voltage seen</dt><dd id="min-voltage">—</dd></div>
+            <div><dt>Highest discharge</dt><dd id="max-discharge">—</dd></div>
+          </dl>
         </div>
-        <dl class="health__stats">
-          <div><dt>SoC (voltage)</dt><dd id="soc-voltage">—</dd></div>
-          <div><dt>SoC (reported)</dt><dd id="soc-reported">—</dd></div>
-          <div><dt>SoC delta</dt><dd id="soc-delta">—</dd></div>
-          <div><dt>Internal R</dt><dd id="internal-r">—</dd></div>
-          <div><dt>Voltage sag</dt><dd id="voltage-sag">—</dd></div>
-          <div><dt>Min voltage</dt><dd id="min-voltage">—</dd></div>
-          <div><dt>Max discharge</dt><dd id="max-discharge">—</dd></div>
-        </dl>
+        <ul class="chips" id="health-notes"></ul>
       </div>
-      <ul class="chips" id="health-notes"></ul>
-    </div>
 
-    <div class="panel">
-      <h3>Runtime &amp; state</h3>
-      <div class="runtime">
-        <div class="runtime__main">
-          <span class="runtime__value" id="runtime-value">—</span>
-          <span class="runtime__label" id="runtime-label">estimate</span>
+      <div class="card">
+        <h3>Backup time</h3>
+        <div class="runtime">
+          <div class="runtime__main">
+            <span class="runtime__value" id="runtime-value">—</span>
+            <span class="runtime__label" id="runtime-label">estimate</span>
+          </div>
+          <dl class="stats">
+            <div><dt>Energy in battery</dt><dd id="remaining-wh">—</dd></div>
+            <div><dt>Battery size</dt><dd id="bank-wh">—</dd></div>
+            <div><dt>Power used now</dt><dd id="load-now">—</dd></div>
+            <div><dt>On battery</dt><dd id="on-battery">—</dd></div>
+            <div><dt>Time on battery</dt><dd id="time-on-batt">—</dd></div>
+            <div><dt>Since grid was lost</dt><dd id="since-grid">—</dd></div>
+            <div><dt>Solar used for charging</dt><dd id="pv-eff">—</dd></div>
+            <div><dt>Charging / discharging</dt><dd id="charge-discharge">—</dd></div>
+          </dl>
         </div>
-        <dl class="health__stats">
-          <div><dt>Remaining</dt><dd id="remaining-wh">—</dd></div>
-          <div><dt>Bank size</dt><dd id="bank-wh">—</dd></div>
-          <div><dt>Load now</dt><dd id="load-now">—</dd></div>
-          <div><dt>On battery</dt><dd id="on-battery">—</dd></div>
-          <div><dt>Time on batt</dt><dd id="time-on-batt">—</dd></div>
-          <div><dt>Since grid fail</dt><dd id="since-grid">—</dd></div>
-          <div><dt>PV efficiency</dt><dd id="pv-eff">—</dd></div>
-          <div><dt>Charge / discharge</dt><dd id="charge-discharge">—</dd></div>
-        </dl>
       </div>
-    </div>
+    </section>
 
-    <div class="panel">
-      <h3>Energy <span class="panel__hint">since start · today</span></h3>
-      <dl class="grid grid--energy" id="energy"></dl>
-      <h3 class="panel__sub">Peaks</h3>
-      <dl class="grid grid--energy" id="peaks"></dl>
-      <div class="actions">
-        <button type="button" id="btn-reset" class="btn">reset counters</button>
+    <section class="grid-2">
+      <div class="card">
+        <h3>Solar and usage <span class="card__hint">last 10 minutes</span></h3>
+        <canvas id="chart-power" width="600" height="120"></canvas>
+        <ul class="legend">
+          <li><i style="background:var(--pv)"></i>Solar</li>
+          <li><i style="background:var(--load)"></i>Power used</li>
+        </ul>
       </div>
-    </div>
-  </section>
+      <div class="card">
+        <h3>Battery voltage <span class="card__hint">last 10 minutes</span></h3>
+        <canvas id="chart-voltage" width="600" height="120"></canvas>
+        <ul class="legend">
+          <li><i style="background:var(--batt)"></i>Battery</li>
+        </ul>
+      </div>
+    </section>
 
-  <section class="row row--charts">
-    <div class="panel">
-      <h3>Power history <span class="panel__hint">last 10 min</span></h3>
-      <canvas id="chart-power" width="600" height="120"></canvas>
-      <ul class="legend">
-        <li><i style="background:var(--pv)"></i>PV</li>
-        <li><i style="background:var(--load)"></i>Load</li>
-      </ul>
-    </div>
-    <div class="panel">
-      <h3>Battery voltage <span class="panel__hint">last 10 min</span></h3>
-      <canvas id="chart-voltage" width="600" height="120"></canvas>
-      <ul class="legend">
-        <li><i style="background:var(--batt)"></i>Battery V</li>
-      </ul>
-    </div>
-  </section>
+    <section class="grid-2">
+      <div class="card">
+        <h3>Energy <span class="card__hint">since this session · today</span></h3>
+        <dl class="list" id="energy"></dl>
+        <h3 class="card__sub">Highest readings</h3>
+        <dl class="list" id="peaks"></dl>
+        <div class="actions">
+          <button type="button" id="btn-reset" class="btn">Reset counters</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Warnings now</h3>
+        <ul class="chips" id="warnings"><li class="chip chip--ok">none</li></ul>
+        <h3 class="card__sub">
+          Recent alerts <span class="card__hint" id="alarm-count">0</span>
+        </h3>
+        <ul class="alarms" id="alarms"><li class="alarms__empty">no alerts recorded</li></ul>
+      </div>
+    </section>
 
-  <section class="row row--alarms">
-    <div class="panel">
-      <h3>Alarm history <span class="panel__hint" id="alarm-count">0</span></h3>
-      <ul class="alarms" id="alarms"><li class="alarms__empty">no alarms recorded</li></ul>
-    </div>
-  </section>
-
-  <section class="row row--split">
-    <div class="panel">
-      <h3>Telemetry <span class="panel__hint" id="stale">—</span></h3>
-      <dl class="grid" id="tiles"></dl>
-    </div>
-    <div class="panel">
-      <h3>State</h3>
-      <div class="mode" id="mode">—</div>
-      <ul class="chips" id="flags"></ul>
-      <h3 class="panel__sub">Warnings</h3>
-      <ul class="chips chips--warn" id="warnings"><li class="chip chip--ok">none</li></ul>
-    </div>
-  </section>
-
-  <section class="row row--split">
-    <div class="panel">
-      <h3>Settings <span class="panel__hint" id="settings-hint">—</span></h3>
-      <dl class="grid" id="settings"></dl>
-    </div>
-    <div class="panel panel--console">
-      <h3>Console</h3>
-      <div class="log" id="log"></div>
-      <form class="cmd" id="cmd-form">
-        <input
-          id="cmd"
-          placeholder="type a command, e.g. QPIGS"
-          autocomplete="off"
-          spellcheck="false"
-          maxlength="64"
-        />
-        <button type="submit">send</button>
-      </form>
-    </div>
-  </section>
-
-  <section class="row">
-    <div class="panel">
-      <h3>Configuration <span class="panel__hint" id="config-hint">waiting for device</span></h3>
-      <div class="config" id="config"></div>
-      <p class="config__note">
-        A write goes to the inverter immediately. Some units only keep it across a power cycle
-        once it has been saved to EEPROM.
+    <section class="card">
+      <h3>
+        Inverter settings <span class="card__hint" id="config-hint">waiting for the inverter</span>
+      </h3>
+      <p class="card__note">
+        These change how the inverter behaves. Nothing is sent until you press Apply. Changes take
+        effect straight away, but may be forgotten after a power cut unless you save them
+        permanently.
       </p>
+      <div class="config" id="config"></div>
       <div class="actions">
-        <button type="button" id="btn-eeprom" class="btn">save to EEPROM</button>
+        <button type="button" id="btn-eeprom" class="btn">Save permanently</button>
       </div>
-    </div>
-  </section>
-</main>
+    </section>
+
+    <details class="advanced">
+      <summary>Advanced details</summary>
+      <div class="advanced__body">
+        <div class="grid-2">
+          <div class="card">
+            <h3>Live readings <span class="card__hint" id="stale">—</span></h3>
+            <dl class="grid" id="tiles"></dl>
+          </div>
+          <div class="card">
+            <h3>Current state</h3>
+            <div class="mode" id="mode">—</div>
+            <ul class="chips" id="flags"></ul>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>Battery diagnostics</h3>
+            <dl class="stats">
+              <div><dt>Internal resistance</dt><dd id="internal-r">—</dd></div>
+              <div><dt>Voltage drop under load</dt><dd id="voltage-sag">—</dd></div>
+            </dl>
+          </div>
+          <div class="card">
+            <h3>Device link</h3>
+            <div class="pills">
+              <span class="pill" id="pill-dialect">dialect —</span>
+              <span class="pill" id="pill-link">link —</span>
+              <span class="pill" id="pill-protocol">—</span>
+            </div>
+            <p class="meta" id="meta">waiting for device</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h3>All inverter settings <span class="card__hint" id="settings-hint">—</span></h3>
+            <dl class="grid" id="settings"></dl>
+          </div>
+          <div class="card card--console">
+            <h3>Command console</h3>
+            <div class="log" id="log"></div>
+            <form class="cmd" id="cmd-form">
+              <input
+                id="cmd"
+                placeholder="Type a command, e.g. QPIGS"
+                autocomplete="off"
+                spellcheck="false"
+                maxlength="64"
+              />
+              <button type="submit" class="btn">Send</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <footer class="statusbar">
+    <span class="statusbar__group">
+      <span class="dot" id="footer-dot" data-tone="absent"></span>
+      <span id="footer-text">Starting up…</span>
+    </span>
+    <span class="statusbar__group" id="footer-updated">—</span>
+  </footer>
+</div>
 `
 
 const $ = (selector: string): HTMLElement => {
@@ -224,16 +270,16 @@ interface Tile {
 }
 
 const TILES: Tile[] = [
-  { label: 'AC input', unit: 'V', digits: 1, read: (t) => t.acInputVoltage },
-  { label: 'Grid', unit: 'Hz', digits: 1, read: (t) => t.acInputFrequency },
-  { label: 'Output', unit: 'Hz', digits: 1, read: (t) => t.acOutputFrequency },
-  { label: 'DC bus', unit: 'V', digits: 0, read: (t) => t.busVoltage },
-  { label: 'PV voltage', unit: 'V', digits: 1, read: (t) => t.pvVoltage },
-  { label: 'PV current', unit: 'A', digits: 2, read: (t) => t.pvCurrent },
-  { label: 'SCC voltage', unit: 'V', digits: 2, read: (t) => t.batteryVoltageFromScc },
-  { label: 'Capacity', unit: '%', digits: 0, read: (t) => t.batteryCapacity },
-  { label: 'Heat sink', unit: '°C', digits: 0, read: (t) => t.heatSinkTemperature },
-  { label: 'Discharge', unit: 'A', digits: 0, read: (t) => t.batteryDischargeCurrent }
+  { label: 'Grid voltage', unit: 'V', digits: 1, read: (t) => t.acInputVoltage },
+  { label: 'Grid frequency', unit: 'Hz', digits: 1, read: (t) => t.acInputFrequency },
+  { label: 'Output frequency', unit: 'Hz', digits: 1, read: (t) => t.acOutputFrequency },
+  { label: 'DC bus voltage', unit: 'V', digits: 0, read: (t) => t.busVoltage },
+  { label: 'Solar voltage', unit: 'V', digits: 1, read: (t) => t.pvVoltage },
+  { label: 'Solar current', unit: 'A', digits: 2, read: (t) => t.pvCurrent },
+  { label: 'Solar charger voltage', unit: 'V', digits: 2, read: (t) => t.batteryVoltageFromScc },
+  { label: 'Battery charge', unit: '%', digits: 0, read: (t) => t.batteryCapacity },
+  { label: 'Inverter temperature', unit: '°C', digits: 0, read: (t) => t.heatSinkTemperature },
+  { label: 'Battery discharge', unit: 'A', digits: 0, read: (t) => t.batteryDischargeCurrent }
 ]
 
 const tiles = $('#tiles')
@@ -247,16 +293,16 @@ interface SettingRow {
 }
 
 const SETTINGS: SettingRow[] = [
-  { label: 'Output V / Hz', read: (s) => `${num(s.acOutputVoltage)} / ${num(s.acOutputFrequency)}` },
+  { label: 'Output voltage / frequency', read: (s) => `${num(s.acOutputVoltage)} / ${num(s.acOutputFrequency)}` },
   { label: 'Rated VA / W', read: (s) => `${int(s.acOutputApparentPower)} / ${int(s.acOutputActivePower)}` },
   { label: 'Battery type', read: (s) => s.batteryType },
-  { label: 'Bulk / float', read: (s) => `${num(s.batteryBulkChargeVoltage)} / ${num(s.batteryFloatChargeVoltage)}` },
+  { label: 'Absorb / float voltage', read: (s) => `${num(s.batteryBulkChargeVoltage)} / ${num(s.batteryFloatChargeVoltage)}` },
   { label: 'Recharge / cut-off', read: (s) => `${num(s.batteryRechargeVoltage)} / ${num(s.batteryUnderVoltage)}` },
-  { label: 'Max AC charge', read: (s) => (s.maxAcChargingCurrent === null ? null : `${int(s.maxAcChargingCurrent)} A`) },
-  { label: 'Max charge', read: (s) => (s.maxChargingCurrent === null ? null : `${int(s.maxChargingCurrent)} A`) },
+  { label: 'Max grid charge current', read: (s) => (s.maxAcChargingCurrent === null ? null : `${int(s.maxAcChargingCurrent)} A`) },
+  { label: 'Max solar charge current', read: (s) => (s.maxChargingCurrent === null ? null : `${int(s.maxChargingCurrent)} A`) },
   { label: 'Output priority', read: (s) => s.outputSourcePriority },
   { label: 'Charger priority', read: (s) => s.chargerSourcePriority },
-  { label: 'Input range', read: (s) => s.inputVoltageRange },
+  { label: 'Input voltage range', read: (s) => s.inputVoltageRange },
   { label: 'Machine type', read: (s) => s.machineType },
   { label: 'Parallel units', read: (s) => s.maxParallelUnits }
 ]
@@ -279,6 +325,17 @@ const FLAG_LABELS: Array<[keyof StatusFlags | keyof Status2Flags, string]> = [
   ['switchedOn', 'Switched on']
 ]
 
+/** Friendly names for the banner. MODE_LABEL stays the technical wording. */
+const MODE_FRIENDLY: Record<string, string> = {
+  P: 'Starting up',
+  S: 'Standby',
+  L: 'On grid',
+  B: 'On battery',
+  F: 'Fault',
+  H: 'Power saving',
+  Y: 'Bypass'
+}
+
 let currentMode: string | null = null
 
 function renderTelemetry(t: Telemetry): void {
@@ -290,6 +347,7 @@ function renderTelemetry(t: Telemetry): void {
   setText('[data-f="batt-voltage"]', num(t.batteryVoltage, 2))
   setText('[data-f="batt-current"]', int(t.batteryChargingCurrent))
   setText('[data-f="batt-discharge"]', int(t.batteryDischargeCurrent))
+  setText('[data-f="batt-percent"]', int(t.batteryCapacity))
   setText('[data-f="load-power"]', int(t.acOutputActivePower))
   setText('[data-f="load-percent"]', int(t.acOutputLoad))
   setText('[data-f="load-va"]', int(t.acOutputApparentPower))
@@ -318,7 +376,10 @@ function renderTelemetry(t: Telemetry): void {
     return `<li class="chip${active ? ' chip--on' : ''}">${label}</li>`
   }).join('')
 
-  setText('#ac-mode', currentMode ? (MODE_LABEL[currentMode] ?? currentMode) : '—')
+  setText(
+    '#ac-mode',
+    currentMode ? (MODE_FRIENDLY[currentMode] ?? MODE_LABEL[currentMode] ?? currentMode) : '—'
+  )
 }
 
 function clamp(value: number): number {
@@ -384,6 +445,10 @@ const CURRENT_VALUE: Record<SettingKey, (s: Settings) => { value: number | null;
     value: s.maxAcChargingCurrent,
     label: `${int(s.maxAcChargingCurrent)} A`
   }),
+  outputVoltage: (s) => ({
+    value: s.acOutputVoltage,
+    label: s.acOutputVoltage === null ? '—' : `${num(s.acOutputVoltage)} V`
+  }),
   outputFrequency: (s) => ({
     value: s.acOutputFrequency === null ? null : Math.round(s.acOutputFrequency / 10) * 10,
     label: `${num(s.acOutputFrequency)} Hz`
@@ -436,7 +501,7 @@ function buildConfigRows(): void {
     const apply = document.createElement('button')
     apply.type = 'button'
     apply.className = 'btn btn--apply'
-    apply.textContent = 'apply'
+    apply.textContent = 'Apply'
     apply.disabled = true
     apply.addEventListener('click', () => void applySetting(spec))
 
@@ -476,6 +541,17 @@ async function applySetting(spec: SettingSpec): Promise<void> {
     return
   }
 
+  // Range check against the same shared spec the main process enforces, so a
+  // value the device would refuse is named here instead of costing a round trip
+  // on the half-duplex line. The main process still re-validates: this is a
+  // courtesy, not the gate.
+  const unit = spec.unit ? ` ${spec.unit}` : ''
+  if (value < spec.min || value > spec.max) {
+    row.result.textContent = `must be ${spec.min}-${spec.max}${unit}`
+    row.result.dataset.tone = 'err'
+    return
+  }
+
   row.apply.disabled = true
   row.result.dataset.tone = ''
   row.result.textContent = 'sending…'
@@ -501,7 +577,10 @@ async function applySetting(spec: SettingSpec): Promise<void> {
 function renderConfiguration(state: DeviceState): void {
   const ready = state.connection === 'ready'
   const settings = state.settings
-  setText('#config-hint', ready ? (settings ? 'read from device' : 'reading…') : 'waiting for device')
+  setText(
+    '#config-hint',
+    ready ? (settings ? 'read from the inverter' : 'reading…') : 'waiting for the inverter'
+  )
   eepromButton.disabled = !ready
 
   for (const [key, row] of configRows) {
@@ -554,8 +633,8 @@ function formatSeconds(seconds: number | null): string {
 }
 
 const ENERGY_ROWS: Array<{ key: string; label: string; pick: (e: DerivedState['energy']) => string }> = [
-  { key: 'pv', label: 'PV generated', pick: (e) => `${formatEnergy(e.pvWh)} · ${formatEnergy(e.pvWhToday)}` },
-  { key: 'load', label: 'Load consumed', pick: (e) => `${formatEnergy(e.loadWh)} · ${formatEnergy(e.loadWhToday)}` },
+  { key: 'pv', label: 'Solar generated', pick: (e) => `${formatEnergy(e.pvWh)} · ${formatEnergy(e.pvWhToday)}` },
+  { key: 'load', label: 'Power used', pick: (e) => `${formatEnergy(e.loadWh)} · ${formatEnergy(e.loadWhToday)}` },
   { key: 'chg', label: 'Battery charged', pick: (e) => `${formatEnergy(e.chargeWh)} · ${formatEnergy(e.chargeWhToday)}` },
   { key: 'dch', label: 'Battery discharged', pick: (e) => `${formatEnergy(e.dischargeWh)} · ${formatEnergy(e.dischargeWhToday)}` },
   { key: 'net', label: 'Net battery', pick: (e) => formatEnergy(e.netWh) }
@@ -567,11 +646,11 @@ energyEl.innerHTML = ENERGY_ROWS.map(
 ).join('')
 
 const PEAK_ROWS: Array<{ key: string; label: string; pick: (p: DerivedState['peaks']) => string }> = [
-  { key: 'pv', label: 'PV peak', pick: (p) => `${p.pvMaxW} W` },
-  { key: 'load', label: 'Load peak', pick: (p) => `${p.loadMaxW} W` },
-  { key: 'batt', label: 'Battery range', pick: (p) => `${p.battVMin} – ${p.battVMax} V` },
-  { key: 'grid', label: 'Grid range', pick: (p) => `${p.gridVMin} – ${p.gridVMax} V` },
-  { key: 'temp', label: 'Peak temp', pick: (p) => `${p.tempMax} °C` }
+  { key: 'pv', label: 'Most solar', pick: (p) => `${p.pvMaxW} W` },
+  { key: 'load', label: 'Most power used', pick: (p) => `${p.loadMaxW} W` },
+  { key: 'batt', label: 'Battery voltage range', pick: (p) => `${p.battVMin} – ${p.battVMax} V` },
+  { key: 'grid', label: 'Grid voltage range', pick: (p) => `${p.gridVMin} – ${p.gridVMax} V` },
+  { key: 'temp', label: 'Hottest temperature', pick: (p) => `${p.tempMax} °C` }
 ]
 
 const peaksEl = $('#peaks')
@@ -629,7 +708,7 @@ function renderAlarms(alarms: AlarmEvent[]): void {
   setText('#alarm-count', String(alarms.length))
   const host = $('#alarms')
   if (!alarms.length) {
-    host.innerHTML = '<li class="alarms__empty">no alarms recorded</li>'
+    host.innerHTML = '<li class="alarms__empty">no alerts recorded</li>'
     return
   }
   host.innerHTML = alarms
@@ -756,11 +835,19 @@ function drawCharts(history: HistoryPoint[]): void {
 }
 
 const CONNECTION_LABEL: Record<string, string> = {
-  absent: 'disconnected',
-  connecting: 'connecting',
-  handshaking: 'handshaking',
-  ready: 'connected',
-  error: 'error'
+  absent: 'Not connected',
+  connecting: 'Connecting…',
+  handshaking: 'Connecting…',
+  ready: 'Connected',
+  error: 'Connection problem'
+}
+
+const FOOTER_TEXT: Record<string, string> = {
+  absent: 'Inverter not connected · plug in the USB cable',
+  connecting: 'Connecting to the inverter…',
+  handshaking: 'Connecting to the inverter…',
+  ready: 'Connected · reading the inverter every second',
+  error: 'Connection problem · check the USB cable'
 }
 
 // Ages are re-rendered on their own clock: state only arrives while the link is
@@ -782,6 +869,79 @@ function refreshHints(): void {
         ? 'loading…'
         : '—'
   )
+  setText(
+    '#footer-updated',
+    lastTelemetryAt ? `Last updated ${when(lastTelemetryAt)}` : 'No readings yet'
+  )
+}
+
+/**
+ * One plain-language sentence for whatever is happening. This is the only part of
+ * the window a non-technical user needs to read, so it never shows protocol
+ * jargon and always says what to do about a problem.
+ */
+function renderStatus(state: DeviceState): void {
+  setText('#footer-text', FOOTER_TEXT[state.connection] ?? 'Waiting for the inverter…')
+
+  const show = (headline: string, detail: string, tone: string): void => {
+    setText('#status-headline', headline)
+    setText('#status-detail', detail)
+    $('#status-banner').dataset.tone = tone
+    $('#footer-dot').dataset.tone = tone
+  }
+
+  if (state.connection === 'absent') {
+    show(
+      'Inverter not connected',
+      'Plug the inverter’s USB cable into this computer — it connects on its own.',
+      'idle'
+    )
+    return
+  }
+  if (state.connection === 'connecting' || state.connection === 'handshaking') {
+    show('Connecting…', 'Getting to know the inverter. This takes a few seconds.', 'idle')
+    return
+  }
+  if (state.connection === 'error') {
+    show(
+      'Connection problem',
+      state.stats.lastFailure ??
+        'The inverter stopped responding. Unplug the USB cable and plug it back in.',
+      'error'
+    )
+    return
+  }
+
+  const warnings = state.warnings?.active ?? []
+  if (warnings.length > 0) {
+    show(
+      'Attention needed',
+      `${warnings.length} warning${warnings.length === 1 ? '' : 's'} reported by the inverter — listed below.`,
+      'warn'
+    )
+    return
+  }
+
+  const t = state.telemetry
+  const d = state.derived
+  const charge = t ? int(t.batteryCapacity) : '—'
+  const solar = t ? int(t.pvInputPower) : '—'
+
+  if (d?.onBattery) {
+    show(
+      'Running on battery',
+      d.runtime.minutes !== null
+        ? `About ${formatDuration(d.runtime.minutes)} of power left at the current rate.`
+        : 'Your home is being powered from the battery.',
+      'battery'
+    )
+    return
+  }
+  if (t?.status.chargingOn && d && d.chargeRateA > 0.5) {
+    show('Charging', `Solar ${solar} W · battery at ${charge}%.`, 'good')
+    return
+  }
+  show('Running normally', `Powered from the grid · battery at ${charge}%.`, 'grid')
 }
 
 window.setInterval(refreshHints, 1000)
@@ -794,6 +954,11 @@ function renderState(state: DeviceState): void {
     const pill = $('#pill-connection')
     pill.textContent = CONNECTION_LABEL[state.connection] ?? state.connection
     pill.dataset.tone = state.connection
+
+    // Lets the stylesheet dim values that are not live any more.
+    app!.dataset.connection = state.connection
+
+    renderStatus(state)
 
     const hs = state.handshake
     setText('#pill-dialect', hs ? `dialect ${hs.dialect}` : 'dialect —')
