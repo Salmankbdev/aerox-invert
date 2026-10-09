@@ -273,6 +273,11 @@ parser reads index 16 and 20 by position and is defensive about the rest. Check
 Sequential parse of **27 fields; older firmware sends 25**. Always keep the raw token
 strings for zero-padded enums — e.g. `machineType` arrives as `"01"`, not `1`.
 
+A field past the end of a short reply comes back `null` — an empty cell in the UI. It must
+never be fabricated into a string like `unknown(undefined)`; `labelAt()` therefore tests the
+index through `pick()` (which maps a missing or non-numeric token to `null`) rather than
+testing the raw `num()` result, which reports "no value" as `NaN`.
+
 ### Commands in use
 
 `QPI` (protocol ID → returns `(PI30`), `QPIGS`, `QPIRI`, `QMOD`, `QPIWS`, `QVFW`, `QID`,
@@ -380,6 +385,16 @@ the panel exposes as **save to EEPROM**.
 6. Only after all of the above: consider the 8-byte chunked-padded write and
    `hid_send_output_report` (would need a node-hid upgrade or a native shim) as
    fallbacks if the standard two paths fail.
+
+### Hardening notes
+
+- A throw from any `state` / `log` listener is caught at the emit site in `service.ts` and
+  `hid-channel.ts`. Nothing a listener does can unwind into the poll loop, and the hotplug
+  scanner runs inside `guard()` because an exception escaping a timer reaches
+  `process.on('uncaughtException')`, which exits the app.
+- The console refuses commands longer than 64 characters before they reach the device.
+- A timeout, a garbage frame or an empty reply costs one poll cycle; only five
+  *consecutive* primary failures are treated as a lost link.
 
 ### Known-unknowns worth keeping visible
 

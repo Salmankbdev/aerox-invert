@@ -164,7 +164,13 @@ app.innerHTML = `
       <h3>Console</h3>
       <div class="log" id="log"></div>
       <form class="cmd" id="cmd-form">
-        <input id="cmd" placeholder="type a command, e.g. QPIGS" autocomplete="off" spellcheck="false" />
+        <input
+          id="cmd"
+          placeholder="type a command, e.g. QPIGS"
+          autocomplete="off"
+          spellcheck="false"
+          maxlength="64"
+        />
         <button type="submit">send</button>
       </form>
     </div>
@@ -765,11 +771,17 @@ let lastTelemetryAt: number | null = null
 let lastSettingsAt: number | null = null
 
 function refreshHints(): void {
+  // Runs on a timer, so it must never throw: $() raises on a missing node and an
+  // uncaught timer error is reported as a renderer crash. setText is null-safe.
   setText('#stale', lastTelemetryAt ? `updated ${when(lastTelemetryAt)}` : '—')
-  const hint = $('#settings-hint')
-  if (lastSettingsAt) hint.textContent = `updated ${when(lastSettingsAt)}`
-  else if (lastConnection === 'ready') hint.textContent = 'loading…'
-  else hint.textContent = '—'
+  setText(
+    '#settings-hint',
+    lastSettingsAt
+      ? `updated ${when(lastSettingsAt)}`
+      : lastConnection === 'ready'
+        ? 'loading…'
+        : '—'
+  )
 }
 
 window.setInterval(refreshHints, 1000)

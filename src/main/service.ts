@@ -39,6 +39,8 @@ const WARMUP_TIMEOUT_MS = 1400
 const FAILURES_BEFORE_GIVEUP = 5
 const MAX_LOGS = 600
 const MAX_DURATIONS = 60
+/** Longest command the console may put on the wire; real PI30 verbs are under 10. */
+const MAX_COMMAND_LEN = 64
 const MAX_POLL_BACKOFF_MS = 8000
 const CONNECT_BACKOFF_BASE_MS = 2000
 const CONNECT_BACKOFF_MAX_MS = 30000
@@ -161,8 +163,17 @@ export class InverterService extends EventEmitter {
   }
 
   async sendCommand(command: string): Promise<SendResult> {
-    const cmd = command.trim().replace(/\s+$/, '')
+    const cmd = command.trim()
     if (!cmd) return { ok: false, tx: '', rx: null, error: 'empty command', crcValid: null }
+    if (cmd.length > MAX_COMMAND_LEN) {
+      return {
+        ok: false,
+        tx: cmd.slice(0, MAX_COMMAND_LEN),
+        rx: null,
+        error: `command too long (${cmd.length} chars, max ${MAX_COMMAND_LEN})`,
+        crcValid: null
+      }
+    }
     if (this.state.connection !== 'ready') {
       return { ok: false, tx: cmd, rx: null, error: 'not connected', crcValid: null }
     }
@@ -463,18 +474,23 @@ export class InverterService extends EventEmitter {
       if (!this.channel.isOpen || this.state.connection !== 'ready') return
       // Schedule the next tick only once this one has finished, so a slow or
       // failing poll can never stack on top of itself.
-      void this.pollOnce().finally(() => {
-        if (!this.channel.isOpen || this.state.connection !== 'ready') return
-        const failed = this.state.stats.consecutiveFailures
-        const period =
-          failed > 0 ? Math.min(POLL_MS * (1 + failed), MAX_POLL_BACKOFF_MS) : POLL_MS
-        const now = Date.now()
-        // Anchor to the previous deadline instead of to `now`: the exchange
-        // itself costs a few hundred ms, and adding the period to the moment
-        // the poll finished makes the cadence drift slower with every tick.
-        nextAt = Math.max(now, nextAt + period)
-        this.pollTimer = setTimeout(tick, nextAt - now)
-      })
+      // Nothing inside pollOnce should reject, but an emit from a listener
+      // could - and a bare `void` on a rejected promise is an unhandled
+      // rejection, which the process logger reports as a crash.
+      void this.pollOnce()
+        .catch((err: unknown) => this.log('err', `poll loop: ${String(err)}`))
+        .finally(() => {
+          if (!this.channel.isOpen || this.state.connection !== 'ready') return
+          const failed = this.state.stats.consecutiveFailures
+          const period =
+            failed > 0 ? Math.min(POLL_MS * (1 + failed), MAX_POLL_BACKOFF_MS) : POLL_MS
+          const now = Date.now()
+          // Anchor to the previous deadline instead of to `now`: the exchange
+          // itself costs a few hundred ms, and adding the period to the moment
+          // the poll finished makes the cadence drift slower with every tick.
+          nextAt = Math.max(now, nextAt + period)
+          this.pollTimer = setTimeout(tick, nextAt - now)
+        })
     }
     this.pollTimer = setTimeout(tick, 0)
   }
@@ -649,11 +665,20 @@ export class InverterService extends EventEmitter {
     const line: LogLine = { at: Date.now(), kind, text, debug }
     this.logs.push(line)
     if (this.logs.length > MAX_LOGS) this.logs.shift()
-    this.emit('log', line)
+    try {
+      this.emit('log', line)
+    } catch (err) {
+      console.error('[aerox] log listener threw:', err)
+    }
   }
 
   private pushState(): void {
-    this.emit('state', this.state)
+    try {
+      this.emit('state', this.state)
+    } catch (err) {
+      // A renderer that has gone away must not take the poll loop down with it.
+      console.error('[aerox] state listener threw:', err)
+    }
   }
 
   /** Update the battery-bank model used for SoC, health and runtime estimates. */

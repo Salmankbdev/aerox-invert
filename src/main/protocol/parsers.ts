@@ -149,9 +149,12 @@ export function parseQPIRI(body: string, at = Date.now()): Settings | null {
 
   const numAt = (i: number): number | null => pick(t, i)
   const labelAt = (i: number, table: string[]): string | null => {
-    const n = num(t[i])
-    if (n === null) return null
-    return table[n] ?? `unknown(${t[i]})`
+    // num() reports "no value" as NaN, never null, so the missing-token case has
+    // to go through pick() - otherwise a short reply (older firmware drops the
+    // last fields) renders as "unknown(undefined)" instead of an empty cell.
+    const index = pick(t, i)
+    if (index === null) return null
+    return table[index] ?? `unknown(${t[i]})`
   }
 
   const machineRaw = t[19]

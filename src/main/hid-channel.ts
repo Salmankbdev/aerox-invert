@@ -24,6 +24,8 @@ export interface RequestOptions {
 
 const MONITOR_INTERVAL_MS = 1000
 const MAX_RX = 16 * 1024
+/** Ceiling on how long request() will wait for the shared line to go idle. */
+const QUIET_MAX_MS = 5000
 
 /**
  * Owns the HID handle and the half-duplex request/reply cycle.
@@ -61,7 +63,10 @@ export class HidChannel extends EventEmitter {
   start(): void {
     if (this.monitor || this.disposed) return
     this.scan()
-    this.monitor = setInterval(() => this.scan(), MONITOR_INTERVAL_MS)
+    // A throw inside a timer reaches process.on('uncaughtException'), which
+    // exits the app. The scanner emits events whose listeners touch the state
+    // machine, so the whole callback is guarded, not just the device lookup.
+    this.monitor = setInterval(() => this.guard(() => this.scan()), MONITOR_INTERVAL_MS)
     this.monitor.unref?.()
   }
 
@@ -187,12 +192,16 @@ export class HidChannel extends EventEmitter {
 
   /** Resolves once the line has been silent for `ms`. */
   async quiet(ms: number): Promise<void> {
-    const deadline = Date.now() + 5000
+    const deadline = Date.now() + QUIET_MAX_MS
     while (Date.now() < deadline) {
       const seen = this.lastRxAt
       await sleep(ms)
       if (this.lastRxAt === seen) return
     }
+    // Something else is talking on the shared buffer - another app holding the
+    // handle, or the bridge replaying stale bytes. Say so instead of stalling
+    // silently, and send anyway so the caller sees a real timeout or reply.
+    this.log('sys', `line still busy after ${QUIET_MAX_MS}ms - sending anyway`)
   }
 
   collect(timeoutMs: number): Promise<Buffer> {
@@ -250,7 +259,12 @@ export class HidChannel extends EventEmitter {
 
   log(kind: LogLine['kind'], text: string, debug = false): void {
     const line: LogLine = { at: Date.now(), kind, text, debug }
-    this.emit('log', line)
+    try {
+      this.emit('log', line)
+    } catch (err) {
+      // A listener throwing must not unwind into whichever call happened to log.
+      console.error('[aerox] log listener threw:', err)
+    }
   }
 }
 
