@@ -487,6 +487,241 @@ main {
   background: color-mix(in srgb, var(--batt) 38%, var(--bg-tile));
 }
 
+/* ---------- analytics: battery health ---------- */
+
+.row--analytics {
+  grid-template-columns: 1.3fr 1fr 1.1fr;
+}
+
+.health {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+
+.health__score {
+  flex: none;
+  width: 96px;
+  text-align: center;
+  padding: 14px 10px;
+  background: var(--bg-tile);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.health__number {
+  font-family: var(--mono);
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--ok);
+}
+
+.health__unit {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bar--tall {
+  height: 5px;
+  margin-top: 10px;
+}
+
+.health__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 14px;
+  margin: 0;
+  flex: 1;
+}
+
+.health__stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.health__stats dt {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.health__stats dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- analytics: runtime ---------- */
+
+.runtime__main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.runtime__value {
+  font-family: var(--mono);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--batt);
+}
+
+.runtime__label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- analytics: energy + peaks ---------- */
+
+.grid--energy {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.grid--energy .tile {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+}
+
+.grid--energy .tile dt {
+  margin-bottom: 0;
+}
+
+.grid--energy .tile dd {
+  font-size: 14px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 7px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-tile);
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.btn:hover {
+  color: var(--fault);
+  border-color: var(--fault);
+}
+
+/* ---------- charts ---------- */
+
+.row--charts {
+  grid-template-columns: 1fr 1fr;
+}
+
+.row--charts canvas {
+  width: 100%;
+  height: 120px;
+  display: block;
+  background: #080b0f;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.legend {
+  list-style: none;
+  display: flex;
+  gap: 16px;
+  margin: 10px 0 0;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.legend i {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
+/* ---------- alarms ---------- */
+
+.alarms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  scrollbar-width: thin;
+}
+
+.alarm {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-tile);
+  margin-bottom: 6px;
+}
+
+.alarm--active {
+  border-color: var(--fault);
+  background: color-mix(in srgb, var(--fault) 14%, var(--bg-tile));
+}
+
+.alarm__time {
+  flex: none;
+  color: var(--muted);
+}
+
+.alarm__name {
+  flex: 1;
+  min-width: 0;
+}
+
+.alarm__dur {
+  flex: none;
+  color: var(--muted);
+}
+
+.alarms__empty {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 8px 0;
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 1180px) {

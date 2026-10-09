@@ -106,8 +106,8 @@ export class HidChannel extends EventEmitter {
       this.dev = dev
       this.info = describe({ ...HidChannel.find().find((d) => d.path === path), path })
       this.rx = Buffer.alloc(0)
-      dev.on('data', (chunk) => this.onData(chunk as Uint8Array | number[]))
-      dev.on('error', (err: Error) => this.onDeviceError(err))
+      dev.on('data', (chunk) => this.guard(() => this.onData(chunk as Uint8Array | number[])))
+      dev.on('error', (err: Error) => this.guard(() => this.onDeviceError(err)))
       this.log('sys', `opened ${path}`)
       this.emit('open', this.info)
     } finally {
@@ -138,11 +138,27 @@ export class HidChannel extends EventEmitter {
     this.close(err.message)
   }
 
+  /** HID callbacks run outside any try/catch - one throw there kills the whole app. */
+  private guard(fn: () => void): void {
+    try {
+      fn()
+    } catch (err) {
+      this.log('err', `handler threw: ${(err as Error).stack ?? String(err)}`)
+    }
+  }
+
   private onData(chunk: Uint8Array | number[]): void {
-    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
+    const raw = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
+    if (raw.length === 0) return
+
+    // The bridge moves the reply in 8-byte interrupt reports and pads idle
+    // reports with NULs. PI30 is pure ASCII (and the crcPI quirk guarantees a
+    // CRC byte is never 0x00), so any 0x00 is framing noise, not payload -
+    // concatenating it is what corrupts the frame mid-stream.
+    const buf = stripNuls(raw)
+    this.lastRxAt = Date.now()
     if (buf.length === 0) return
 
-    this.lastRxAt = Date.now()
     this.rx = this.rx.length + buf.length > MAX_RX ? buf : Buffer.concat([this.rx, buf])
     this.emit('bytes', buf)
     this.tryResolve()
@@ -204,7 +220,7 @@ export class HidChannel extends EventEmitter {
     if (!dev) throw new Error('device not open')
     const report = toReport(Buffer.from(bytes))
     const written = this.writeMode === 'feature' ? dev.sendFeatureReport(report) : dev.write(report)
-    this.log('tx', `${this.writeMode} ${toPrintable(bytes)}  ${toHex(report)}`)
+    this.log('tx', `${this.writeMode} ${toPrintable(bytes)}  ${toHex(report)}`, true)
     return written
   }
 
@@ -228,12 +244,12 @@ export class HidChannel extends EventEmitter {
     }
 
     const buf = await reply
-    this.log('rx', `${toPrintable(buf)}  ${toHex(buf)}`)
+    this.log('rx', `${toPrintable(buf)}  ${toHex(buf)}`, true)
     return buf
   }
 
-  log(kind: LogLine['kind'], text: string): void {
-    const line: LogLine = { at: Date.now(), kind, text }
+  log(kind: LogLine['kind'], text: string, debug = false): void {
+    const line: LogLine = { at: Date.now(), kind, text, debug }
     this.emit('log', line)
   }
 }
@@ -257,4 +273,13 @@ function describe(d: Partial<ReturnType<typeof devices>[number]> & { path?: stri
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+/** Fast NUL-strip. PI30 is ASCII, so 0x00 is always the bridge's report padding. */
+function stripNuls(buf: Buffer): Buffer {
+  if (!buf.includes(0x00)) return buf
+  const out = Buffer.allocUnsafe(buf.length)
+  let n = 0
+  for (const b of buf) if (b !== 0x00) out[n++] = b
+  return out.subarray(0, n)
 }

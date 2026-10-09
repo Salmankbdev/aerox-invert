@@ -15,7 +15,8 @@
     "pack": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "probe": "node scripts/probe.mjs",
-    "probe:quick": "node scripts/probe.mjs --quick"
+    "probe:quick": "node scripts/probe.mjs --quick",
+    "logs": "powershell -NoProfile -Command \"$p = Join-Path $env:APPDATA 'aerox-monitor\\logs.txt'; if (Test-Path $p) { notepad $p } else { Write-Host \\\"no log yet at $p\\\" }\""
   },
   "dependencies": {
     "node-hid": "^3.4.0"

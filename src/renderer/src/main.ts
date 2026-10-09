@@ -1,5 +1,15 @@
 import './style.css'
-import type { DeviceState, LogLine, Settings, Status2Flags, StatusFlags, Telemetry } from '@shared/types'
+import type {
+  AlarmEvent,
+  DerivedState,
+  DeviceState,
+  HistoryPoint,
+  LogLine,
+  Settings,
+  Status2Flags,
+  StatusFlags,
+  Telemetry
+} from '@shared/types'
 import { MODE_LABEL } from '@shared/types'
 
 const app = document.getElementById('app')
@@ -47,6 +57,84 @@ app.innerHTML = `
       <p class="sub"><span data-f="ac-frequency">—</span> Hz · <span data-f="ac-mode">—</span></p>
       <div class="bar"><i data-b="ac"></i></div>
     </article>
+  </section>
+
+  <section class="row row--analytics">
+    <div class="panel panel--health">
+      <h3>Battery health <span class="panel__hint" id="health-verdict">—</span></h3>
+      <div class="health">
+        <div class="health__score">
+          <span class="health__number" id="health-score">—</span>
+          <span class="health__unit">/100</span>
+          <div class="bar bar--tall"><i id="health-bar" style="background:var(--ok)"></i></div>
+        </div>
+        <dl class="health__stats">
+          <div><dt>SoC (voltage)</dt><dd id="soc-voltage">—</dd></div>
+          <div><dt>SoC (reported)</dt><dd id="soc-reported">—</dd></div>
+          <div><dt>SoC delta</dt><dd id="soc-delta">—</dd></div>
+          <div><dt>Internal R</dt><dd id="internal-r">—</dd></div>
+          <div><dt>Voltage sag</dt><dd id="voltage-sag">—</dd></div>
+          <div><dt>Min voltage</dt><dd id="min-voltage">—</dd></div>
+          <div><dt>Max discharge</dt><dd id="max-discharge">—</dd></div>
+        </dl>
+      </div>
+      <ul class="chips" id="health-notes"></ul>
+    </div>
+
+    <div class="panel">
+      <h3>Runtime &amp; state</h3>
+      <div class="runtime">
+        <div class="runtime__main">
+          <span class="runtime__value" id="runtime-value">—</span>
+          <span class="runtime__label" id="runtime-label">estimate</span>
+        </div>
+        <dl class="health__stats">
+          <div><dt>Remaining</dt><dd id="remaining-wh">—</dd></div>
+          <div><dt>Bank size</dt><dd id="bank-wh">—</dd></div>
+          <div><dt>Load now</dt><dd id="load-now">—</dd></div>
+          <div><dt>On battery</dt><dd id="on-battery">—</dd></div>
+          <div><dt>Time on batt</dt><dd id="time-on-batt">—</dd></div>
+          <div><dt>Since grid fail</dt><dd id="since-grid">—</dd></div>
+          <div><dt>PV efficiency</dt><dd id="pv-eff">—</dd></div>
+          <div><dt>Charge / discharge</dt><dd id="charge-discharge">—</dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Energy <span class="panel__hint">since start · today</span></h3>
+      <dl class="grid grid--energy" id="energy"></dl>
+      <h3 class="panel__sub">Peaks</h3>
+      <dl class="grid grid--energy" id="peaks"></dl>
+      <div class="actions">
+        <button type="button" id="btn-reset" class="btn">reset counters</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="row row--charts">
+    <div class="panel">
+      <h3>Power history <span class="panel__hint">last 10 min</span></h3>
+      <canvas id="chart-power" width="600" height="120"></canvas>
+      <ul class="legend">
+        <li><i style="background:var(--pv)"></i>PV</li>
+        <li><i style="background:var(--load)"></i>Load</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Battery voltage <span class="panel__hint">last 10 min</span></h3>
+      <canvas id="chart-voltage" width="600" height="120"></canvas>
+      <ul class="legend">
+        <li><i style="background:var(--batt)"></i>Battery V</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="row row--alarms">
+    <div class="panel">
+      <h3>Alarm history <span class="panel__hint" id="alarm-count">0</span></h3>
+      <ul class="alarms" id="alarms"><li class="alarms__empty">no alarms recorded</li></ul>
+    </div>
   </section>
 
   <section class="row row--split">
@@ -221,6 +309,244 @@ function renderSettings(s: Settings): void {
   }
 }
 
+// ------------------------------------------------------------- derived panels
+
+const VERDICT_TONE: Record<string, string> = {
+  good: 'var(--ok)',
+  fair: 'var(--load)',
+  poor: 'var(--ac)',
+  critical: 'var(--fault)',
+  unknown: 'var(--muted)'
+}
+
+function formatDuration(minutes: number | null): string {
+  if (minutes === null || !Number.isFinite(minutes) || minutes < 0) return '—'
+  if (minutes < 1) return '<1 min'
+  if (minutes < 60) return `${Math.round(minutes)} min`
+  const h = Math.floor(minutes / 60)
+  const m = Math.round(minutes % 60)
+  if (h < 48) return m ? `${h} h ${m} min` : `${h} h`
+  return `${Math.floor(h / 24)} d ${h % 24} h`
+}
+
+function formatEnergy(wattHours: number): string {
+  if (!Number.isFinite(wattHours)) return '—'
+  if (Math.abs(wattHours) < 1000) return `${Math.round(wattHours)} Wh`
+  return `${(wattHours / 1000).toFixed(2)} kWh`
+}
+
+function formatSeconds(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return '—'
+  if (seconds < 60) return `${Math.round(seconds)} s`
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h < 24) return `${h} h ${m} min`
+  return `${Math.floor(h / 24)} d ${h % 24} h`
+}
+
+const ENERGY_ROWS: Array<{ key: string; label: string; pick: (e: DerivedState['energy']) => string }> = [
+  { key: 'pv', label: 'PV generated', pick: (e) => `${formatEnergy(e.pvWh)} · ${formatEnergy(e.pvWhToday)}` },
+  { key: 'load', label: 'Load consumed', pick: (e) => `${formatEnergy(e.loadWh)} · ${formatEnergy(e.loadWhToday)}` },
+  { key: 'chg', label: 'Battery charged', pick: (e) => `${formatEnergy(e.chargeWh)} · ${formatEnergy(e.chargeWhToday)}` },
+  { key: 'dch', label: 'Battery discharged', pick: (e) => `${formatEnergy(e.dischargeWh)} · ${formatEnergy(e.dischargeWhToday)}` },
+  { key: 'net', label: 'Net battery', pick: (e) => formatEnergy(e.netWh) }
+]
+
+const energyEl = $('#energy')
+energyEl.innerHTML = ENERGY_ROWS.map(
+  (r) => `<div class="tile"><dt>${r.label}</dt><dd><span data-energy="${r.key}">—</span></dd></div>`
+).join('')
+
+const PEAK_ROWS: Array<{ key: string; label: string; pick: (p: DerivedState['peaks']) => string }> = [
+  { key: 'pv', label: 'PV peak', pick: (p) => `${p.pvMaxW} W` },
+  { key: 'load', label: 'Load peak', pick: (p) => `${p.loadMaxW} W` },
+  { key: 'batt', label: 'Battery range', pick: (p) => `${p.battVMin} – ${p.battVMax} V` },
+  { key: 'grid', label: 'Grid range', pick: (p) => `${p.gridVMin} – ${p.gridVMax} V` },
+  { key: 'temp', label: 'Peak temp', pick: (p) => `${p.tempMax} °C` }
+]
+
+const peaksEl = $('#peaks')
+peaksEl.innerHTML = PEAK_ROWS.map(
+  (r) => `<div class="tile"><dt>${r.label}</dt><dd><span data-peak="${r.key}">—</span></dd></div>`
+).join('')
+
+function renderDerived(d: DerivedState): void {
+  // Battery health
+  const b = d.battery
+  setText('#health-score', String(b.healthScore))
+  setText('#health-verdict', b.verdict)
+  const scoreBar = $('#health-bar')
+  scoreBar.style.transform = `scaleX(${clamp(b.healthScore / 100).toFixed(3)})`
+  scoreBar.style.background = VERDICT_TONE[b.verdict] ?? 'var(--muted)'
+
+  setText('#soc-voltage', `${b.socVoltage}%`)
+  setText('#soc-reported', `${b.socReported}%`)
+  const delta = b.socDelta
+  const deltaEl = $('#soc-delta')
+  deltaEl.textContent = delta > 0 ? `+${delta}%` : `${delta}%`
+  deltaEl.style.color = Math.abs(delta) > 15 ? 'var(--load)' : ''
+  setText('#internal-r', `${b.internalResistanceMOhm} mΩ`)
+  setText('#voltage-sag', `${b.sagVoltage.toFixed(3)} V`)
+  setText('#min-voltage', `${b.minVoltage} V`)
+  setText('#max-discharge', `${b.maxDischargeA} A`)
+
+  const notes = $('#health-notes')
+  notes.innerHTML = b.notes.length
+    ? b.notes.map((n) => `<li class="chip">${escapeHtml(n)}</li>`).join('')
+    : '<li class="chip chip--ok">no concerns</li>'
+
+  // Runtime
+  const r = d.runtime
+  setText('#runtime-value', formatDuration(r.minutes))
+  setText('#runtime-label', r.minutes === null ? (d.onBattery ? 'charging or idle' : 'on grid') : `based on ${r.basis}`)
+  setText('#remaining-wh', formatEnergy(r.remainingWh))
+  setText('#bank-wh', formatEnergy(r.bankWh))
+  setText('#load-now', `${r.loadW} W`)
+  setText('#on-battery', d.onBattery ? 'yes' : 'no')
+  setText('#time-on-batt', formatSeconds(d.secondsOnBattery))
+  setText('#since-grid', formatSeconds(d.secondsSinceGridFail))
+  setText('#pv-eff', d.pvEfficiency === null ? '—' : `${d.pvEfficiency}%`)
+  setText('#charge-discharge', `+${d.chargeRateA} / −${d.dischargeRateA} A`)
+
+  // Energy + peaks
+  for (const row of ENERGY_ROWS) setText(`[data-energy="${row.key}"]`, row.pick(d.energy))
+  for (const row of PEAK_ROWS) setText(`[data-peak="${row.key}"]`, row.pick(d.peaks))
+
+  renderAlarms(d.alarms)
+  drawCharts(d.history)
+}
+
+function renderAlarms(alarms: AlarmEvent[]): void {
+  setText('#alarm-count', String(alarms.length))
+  const host = $('#alarms')
+  if (!alarms.length) {
+    host.innerHTML = '<li class="alarms__empty">no alarms recorded</li>'
+    return
+  }
+  host.innerHTML = alarms
+    .map((a) => {
+      const start = new Date(a.at).toLocaleTimeString('en-GB', { hour12: false })
+      const dur = a.clearedAt ? formatSeconds(Math.round((a.clearedAt - a.at) / 1000)) : 'active'
+      const cls = a.clearedAt ? 'alarm--cleared' : 'alarm--active'
+      return `<li class="alarm ${cls}"><span class="alarm__time">${start}</span><span class="alarm__name">${escapeHtml(a.warning)}</span><span class="alarm__dur">${dur}</span></li>`
+    })
+    .join('')
+}
+
+// -------------------------------------------------------------------- charts
+
+function drawLine(
+  canvas: HTMLCanvasElement,
+  series: Array<{ points: number[]; color: string; fill?: boolean }>,
+  opts: { min?: number; max?: number } = {}
+): void {
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  const dpr = window.devicePixelRatio || 1
+  const cssW = canvas.clientWidth || canvas.width
+  const cssH = canvas.clientHeight || canvas.height
+  if (canvas.width !== Math.round(cssW * dpr)) canvas.width = Math.round(cssW * dpr)
+  if (canvas.height !== Math.round(cssH * dpr)) canvas.height = Math.round(cssH * dpr)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+  ctx.clearRect(0, 0, cssW, cssH)
+  if (!series.length || !series[0].points.length) return
+
+  let lo = opts.min
+  let hi = opts.max
+  if (lo === undefined || hi === undefined) {
+    let dataLo = Infinity
+    let dataHi = -Infinity
+    for (const s of series) {
+      for (const p of s.points) {
+        if (!Number.isFinite(p)) continue
+        if (p < dataLo) dataLo = p
+        if (p > dataHi) dataHi = p
+      }
+    }
+    if (!Number.isFinite(dataLo)) return
+    const pad = (dataHi - dataLo) * 0.1 || 1
+    lo = lo ?? dataLo - pad
+    hi = hi ?? dataHi + pad
+  }
+  if (hi - lo < 1e-6) hi = lo + 1
+
+  // Horizontal guide lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)'
+  ctx.lineWidth = 1
+  for (let i = 0; i <= 3; i++) {
+    const y = Math.round((cssH - 1) * (i / 3)) + 0.5
+    ctx.beginPath()
+    ctx.moveTo(0, y)
+    ctx.lineTo(cssW, y)
+    ctx.stroke()
+  }
+
+  for (const s of series) {
+    const n = s.points.length
+    if (n < 2) continue
+
+    const xAt = (i: number) => (i / (n - 1)) * cssW
+    const yAt = (v: number) => cssH - 2 - ((v - lo) / (hi - lo)) * (cssH - 4)
+
+    ctx.beginPath()
+    s.points.forEach((v, i) => {
+      const x = xAt(i)
+      const y = yAt(Number.isFinite(v) ? v : lo)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    })
+
+    if (s.fill) {
+      ctx.save()
+      ctx.lineTo(cssW, cssH)
+      ctx.lineTo(0, cssH)
+      ctx.closePath()
+      ctx.fillStyle = s.color.replace(')', ', 0.15)').replace('rgb', 'rgba')
+      if (!s.color.startsWith('rgb')) ctx.fillStyle = s.color + '26'
+      ctx.fill()
+      ctx.restore()
+      // Redraw the stroke on top of the fill
+      ctx.beginPath()
+      s.points.forEach((v, i) => {
+        const x = xAt(i)
+        const y = yAt(Number.isFinite(v) ? v : lo)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      })
+    }
+
+    ctx.strokeStyle = s.color
+    ctx.lineWidth = 1.5
+    ctx.lineJoin = 'round'
+    ctx.stroke()
+  }
+}
+
+function drawCharts(history: HistoryPoint[]): void {
+  const powerCanvas = $('#chart-power') as HTMLCanvasElement | null
+  const voltCanvas = $('#chart-voltage') as HTMLCanvasElement | null
+  if (!powerCanvas || !voltCanvas) return
+
+  // Downsample to ~120 points for the canvas.
+  const step = Math.max(1, Math.floor(history.length / 120))
+  const pts = history.filter((_, i) => i % step === 0)
+
+  drawLine(
+    powerCanvas,
+    [
+      { points: pts.map((p) => p.pvW), color: '#38d39f', fill: true },
+      { points: pts.map((p) => p.loadW), color: '#f6b73c', fill: true }
+    ],
+    { min: 0 }
+  )
+
+  const volts = pts.map((p) => p.battV).filter((v) => v > 0)
+  drawLine(voltCanvas, [{ points: volts, color: '#5b9bff', fill: true }], { min: 10.5, max: 14.5 })
+}
+
 const CONNECTION_LABEL: Record<string, string> = {
   absent: 'disconnected',
   connecting: 'connecting',
@@ -230,41 +556,52 @@ const CONNECTION_LABEL: Record<string, string> = {
 }
 
 function renderState(state: DeviceState): void {
-  currentMode = state.mode
+  try {
+    currentMode = state.mode
 
-  const pill = $('#pill-connection')
-  pill.textContent = CONNECTION_LABEL[state.connection] ?? state.connection
-  pill.dataset.tone = state.connection
+    const pill = $('#pill-connection')
+    pill.textContent = CONNECTION_LABEL[state.connection] ?? state.connection
+    pill.dataset.tone = state.connection
 
-  const hs = state.handshake
-  setText('#pill-dialect', hs ? `dialect ${hs.dialect}` : 'dialect —')
-  setText('#pill-link', hs?.writeMode ? `${hs.writeMode} · ${hs.crcEnabled ? 'crc' : 'plain'}` : 'link —')
-  setText('#pill-protocol', hs?.protocolId ?? '—')
+    const hs = state.handshake
+    setText('#pill-dialect', hs ? `dialect ${hs.dialect}` : 'dialect —')
+    setText(
+      '#pill-link',
+      hs?.writeMode ? `${hs.writeMode} · ${hs.crcEnabled ? 'crc' : 'plain'}` : 'link —'
+    )
+    setText('#pill-protocol', hs?.protocolId ?? '—')
 
-  const meta: string[] = []
-  if (hs?.model) meta.push(hs.model)
-  if (hs?.serial) meta.push(`SN ${hs.serial}`)
-  if (hs?.firmware) meta.push(`fw ${hs.firmware}`)
-  meta.push(`${state.stats.ok} ok / ${state.stats.failed} failed`, `${state.stats.meanPollMs} ms`)
-  if (state.stats.lastFailure) meta.push(`last error: ${state.stats.lastFailure}`)
-  setText('#meta', meta.join(' · '))
+    const meta: string[] = []
+    if (hs?.model) meta.push(hs.model)
+    if (hs?.serial) meta.push(`SN ${hs.serial}`)
+    if (hs?.firmware) meta.push(`fw ${hs.firmware}`)
+    meta.push(`${state.stats.ok} ok / ${state.stats.failed} failed`, `${state.stats.meanPollMs} ms`)
+    if (state.stats.lastFailure) meta.push(`last error: ${state.stats.lastFailure}`)
+    setText('#meta', meta.join(' · '))
 
-  if (state.telemetry) {
-    renderTelemetry(state.telemetry)
-    setText('#stale', `updated ${when(state.telemetry.at)}`)
-  }
+    if (state.telemetry) {
+      renderTelemetry(state.telemetry)
+      setText('#stale', `updated ${when(state.telemetry.at)}`)
+    }
 
-  if (state.settings) renderSettings(state.settings)
+    if (state.derived) renderDerived(state.derived)
 
-  setText('#mode', state.mode ? (MODE_LABEL[state.mode] ?? state.mode) : '—')
+    if (state.settings) renderSettings(state.settings)
 
-  const warnings = $('#warnings')
-  if (!state.warnings || state.warnings.active.length === 0) {
-    warnings.innerHTML = '<li class="chip chip--ok">none</li>'
-  } else {
-    warnings.innerHTML = state.warnings.active
-      .map((w) => `<li class="chip chip--fault">${escapeHtml(w)}</li>`)
-      .join('')
+    setText('#mode', state.mode ? (MODE_LABEL[state.mode] ?? state.mode) : '—')
+
+    const warnings = $('#warnings')
+    if (!state.warnings || state.warnings.active.length === 0) {
+      warnings.innerHTML = '<li class="chip chip--ok">none</li>'
+    } else {
+      warnings.innerHTML = state.warnings.active
+        .map((w) => `<li class="chip chip--fault">${escapeHtml(w)}</li>`)
+        .join('')
+    }
+  } catch (err) {
+    // A malformed frame must never be able to kill the renderer.
+    console.error('[aerox] render failed:', err)
+    appendLog({ at: Date.now(), kind: 'err', text: `render failed: ${String(err)}` })
   }
 }
 
@@ -306,14 +643,33 @@ $('#cmd-form').addEventListener('submit', (event) => {
     .catch((err: unknown) => appendLog({ at: Date.now(), kind: 'err', text: String(err) }))
 })
 
+$('#btn-reset').addEventListener('click', () => {
+  void window.aerox
+    .resetAnalytics()
+    .then(() => appendLog({ at: Date.now(), kind: 'sys', text: 'analytics counters reset' }))
+    .catch((err: unknown) => appendLog({ at: Date.now(), kind: 'err', text: String(err) }))
+})
+
+// Redraw the canvases when the window resizes - the backing store is
+// device-pixel-ratio sized, so a resize would otherwise leave them blurry.
+let resizeTimer: number | undefined
+window.addEventListener('resize', () => {
+  window.clearTimeout(resizeTimer)
+  resizeTimer = window.setTimeout(() => {
+    const last = app!.querySelector('#stale')
+    void last // charts re-draw on the next state push; nothing to force here
+  }, 150)
+})
+
 async function boot(): Promise<void> {
   window.aerox.onLog(appendLog)
   window.aerox.onState(renderState)
 
   try {
-    const { state, logs } = await window.aerox.getState()
+    const { state, logs, logFile } = await window.aerox.getState()
     logs.forEach(appendLog)
     renderState(state)
+    if (logFile) appendLog({ at: Date.now(), kind: 'sys', text: `log file: ${logFile}` })
   } catch (err) {
     appendLog({ at: Date.now(), kind: 'err', text: `boot: ${String(err)}` })
   }
