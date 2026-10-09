@@ -9,11 +9,15 @@ import {
   type HandshakeAttempt,
   type LogLine,
   type SendResult,
+  type SetSettingResult,
+  type SettingKey,
   type WriteMode
 } from '@shared/types'
 import { HidChannel, TimeoutError } from './hid-channel'
+import { detectConflicts } from './conflicts'
 import { decodeReply, encodeCommand, toPrintable } from './protocol/framing'
 import { Deriver } from './protocol/derived'
+import { buildSettingCommand } from './protocol/setters'
 import {
   parseFirmware,
   parseProtocolId,
@@ -29,10 +33,36 @@ const PROBE_TIMEOUT_MS = 900
 const QUERY_TIMEOUT_MS = 800
 /** QPIGS is the slow one (~500 ms live). Give it headroom over a plain query. */
 const POLL_TIMEOUT_MS = 1500
+/** QPIRI is the longest reply on the wire (27 fields) - give it the most room. */
+const SETTINGS_TIMEOUT_MS = 2200
 const WARMUP_TIMEOUT_MS = 1400
 const FAILURES_BEFORE_GIVEUP = 5
 const MAX_LOGS = 600
 const MAX_DURATIONS = 60
+const MAX_POLL_BACKOFF_MS = 8000
+const CONNECT_BACKOFF_BASE_MS = 2000
+const CONNECT_BACKOFF_MAX_MS = 30000
+
+/**
+ * Cadence for the slow configuration queries, in wall-clock milliseconds.
+ *
+ * These used to hang off a cycle counter (`cycle % 60 === 0`), which meant the
+ * Settings snapshot waited a full minute after connect - and because that
+ * counter resets on every reconnect, a link that drops before it reaches 60
+ * never fetched QPIRI at all. Wall-clock deadlines have neither problem.
+ */
+const SECONDARY_INTERVAL_MS = {
+  QMOD: 5000,
+  QPIWS: 10000,
+  QPIRI: 30000
+} as const
+
+type SecondaryCmd = keyof typeof SECONDARY_INTERVAL_MS
+
+/** Pull a failed slow query forward - one dropped frame must not blank a panel for a whole interval. */
+const SECONDARY_RETRY_MS = 4000
+/** How often to look for a vendor app that would be fighting us for the handle. */
+const CONFLICT_CHECK_MS = 15000
 
 function blankState(): DeviceState {
   return {
@@ -51,7 +81,8 @@ function blankState(): DeviceState {
       lastOkAt: null,
       lastFailure: null,
       meanPollMs: 0
-    }
+    },
+    conflicts: []
   }
 }
 
@@ -67,25 +98,58 @@ export class InverterService extends EventEmitter {
   private state: DeviceState = blankState()
   private connecting = false
   private pollTimer: NodeJS.Timeout | null = null
-  private cycle = 0
+  private conflictTimer: NodeJS.Timeout | null = null
+  private nextDue: Record<SecondaryCmd, number> = { QMOD: 0, QPIWS: 0, QPIRI: 0 }
+  private connectAttempts = 0
+  private nextConnectAt = 0
   private mutex: Promise<unknown> = Promise.resolve()
   private durations: number[] = []
   private logs: LogLine[] = []
 
   constructor() {
     super()
-    this.channel.on('appeared', (info: DeviceInfo) => void this.connect(info))
+    this.channel.on('appeared', (info: DeviceInfo) => {
+      // Space reconnects out: a device that keeps failing its handshake, or is
+      // held by another program, must not be hammered once a second.
+      if (Date.now() < this.nextConnectAt) return
+      void this.connect(info)
+    })
     this.channel.on('close', (reason: string) => this.onClose(reason))
     this.channel.on('log', (line: LogLine) => this.log(line.kind, line.text, line.debug))
   }
 
   start(): void {
     this.channel.start()
+    void this.refreshConflicts()
+    this.conflictTimer = setInterval(() => void this.refreshConflicts(), CONFLICT_CHECK_MS)
+    this.conflictTimer.unref?.()
   }
 
   stop(): void {
     this.stopPolling()
+    if (this.conflictTimer) {
+      clearInterval(this.conflictTimer)
+      this.conflictTimer = null
+    }
     this.channel.dispose()
+  }
+
+  /** Keep the "vendor app is running" list current, and push it only when it changes. */
+  private async refreshConflicts(): Promise<void> {
+    const found = await detectConflicts()
+    const current = this.state.conflicts
+    if (found.length === current.length && found.every((name, i) => name === current[i])) return
+
+    this.state.conflicts = found
+    if (found.length) {
+      this.log(
+        'err',
+        `${found.join(', ')} is running and can seize the USB handle - close it for a stable link`
+      )
+    } else {
+      this.log('sys', 'no conflicting vendor app detected')
+    }
+    this.pushState()
   }
 
   snapshot(): DeviceState {
@@ -119,18 +183,63 @@ export class InverterService extends EventEmitter {
     }
   }
 
+  /**
+   * Write one inverter parameter.
+   *
+   * The value is validated and encoded in the main process, the command goes
+   * out through the same mutex the poll loop uses (half-duplex: one command in
+   * flight), and a successful write is followed by a fresh QPIRI so the UI
+   * shows what the device accepted rather than what we asked for.
+   */
+  async writeSetting(key: SettingKey, value: number): Promise<SetSettingResult> {
+    const built = buildSettingCommand(key, value)
+    if (!built.ok) return { ok: false, key, command: '', rx: null, error: built.error }
+    if (this.state.connection !== 'ready') {
+      return { ok: false, key, command: built.command, rx: null, error: 'not connected' }
+    }
+
+    const result = await this.sendCommand(built.command)
+    if (result.ok) await this.refreshSettings()
+    return { ok: result.ok, key, command: built.command, rx: result.rx, error: result.error }
+  }
+
+  /** Re-read QPIRI on demand - used right after a write. */
+  private async refreshSettings(): Promise<void> {
+    try {
+      const buf = await this.query('QPIRI', SETTINGS_TIMEOUT_MS)
+      const decoded = decodeReply(buf)
+      if (decoded.kind === 'nak' || !decoded.body) return
+      const settings = parseQPIRI(decoded.body)
+      if (!settings) return
+      this.state.settings = settings
+      this.nextDue.QPIRI = Date.now() + SECONDARY_INTERVAL_MS.QPIRI
+      this.pushState()
+    } catch (err) {
+      this.log('sys', `QPIRI after write: ${(err as Error).message}`)
+    }
+  }
+
   private async connect(info: DeviceInfo): Promise<void> {
     if (this.connecting || this.channel.isOpen) return
     this.connecting = true
     this.stopPolling()
-    this.state = { ...blankState(), connection: 'connecting', info }
+    // Carry the conflict list across the reconnect - blankState() would wipe it
+    // and the banner would blink off for up to a full check interval.
+    const conflicts = this.state.conflicts
+    this.state = { ...blankState(), connection: 'connecting', info, conflicts }
     this.deriver.reset()
     this.pushState()
 
     try {
       await this.channel.open(info.path)
     } catch (err) {
-      this.fail(`open failed: ${(err as Error).message}`)
+      const detail = (err as Error).message
+      // The usual cause on Windows is the vendor app holding the handle.
+      const hint = /open|access|denied|busy|in use/i.test(detail)
+        ? ' - is WatchPower/SolarPower holding the device?'
+        : ''
+      this.fail(`open failed: ${detail}${hint}`)
+      this.backoffReconnect()
       this.connecting = false
       return
     }
@@ -141,9 +250,12 @@ export class InverterService extends EventEmitter {
       this.state.handshake = handshake
       await this.warmup()
       this.setConnection('ready')
+      this.connectAttempts = 0
+      this.nextConnectAt = 0
       this.startPolling()
     } catch (err) {
       this.fail((err as Error).message)
+      this.backoffReconnect()
     } finally {
       this.connecting = false
     }
@@ -156,11 +268,27 @@ export class InverterService extends EventEmitter {
     this.channel.close(message)
   }
 
+  /** Exponential backoff between reconnect attempts, capped so it never gives up. */
+  private backoffReconnect(): void {
+    this.connectAttempts = Math.min(this.connectAttempts + 1, 12)
+    const delay = Math.min(
+      CONNECT_BACKOFF_BASE_MS * 2 ** (this.connectAttempts - 1),
+      CONNECT_BACKOFF_MAX_MS
+    )
+    this.nextConnectAt = Date.now() + delay
+    this.log('sys', `reconnect attempt ${this.connectAttempts} in ${Math.round(delay / 1000)}s`)
+  }
+
   private onClose(reason: string): void {
     this.stopPolling()
     this.state.info = null
     this.state.mode = null
     if (this.state.connection !== 'error') this.state.connection = 'absent'
+    // A real unplug is not a failure - come straight back when it is replugged.
+    if (reason === 'unplugged') {
+      this.connectAttempts = 0
+      this.nextConnectAt = 0
+    }
     this.pushState()
     this.log('sys', `link down: ${reason}`)
   }
@@ -326,20 +454,29 @@ export class InverterService extends EventEmitter {
 
   private startPolling(): void {
     this.stopPolling()
-    this.cycle = 0
+    // Everything slow is due immediately, so the dashboard - the Settings panel
+    // in particular - fills in on the first cycle instead of a minute later.
+    this.nextDue = { QMOD: 0, QPIWS: 0, QPIRI: 0 }
+
+    let nextAt = Date.now()
     const tick = (): void => {
       if (!this.channel.isOpen || this.state.connection !== 'ready') return
       // Schedule the next tick only once this one has finished, so a slow or
-      // failing poll can never stack on top of itself. Back off while the link
-      // is unhealthy instead of hammering a device that is already struggling.
+      // failing poll can never stack on top of itself.
       void this.pollOnce().finally(() => {
         if (!this.channel.isOpen || this.state.connection !== 'ready') return
         const failed = this.state.stats.consecutiveFailures
-        const delay = failed > 0 ? Math.min(POLL_MS * (1 + failed), 8000) : POLL_MS
-        this.pollTimer = setTimeout(tick, delay)
+        const period =
+          failed > 0 ? Math.min(POLL_MS * (1 + failed), MAX_POLL_BACKOFF_MS) : POLL_MS
+        const now = Date.now()
+        // Anchor to the previous deadline instead of to `now`: the exchange
+        // itself costs a few hundred ms, and adding the period to the moment
+        // the poll finished makes the cadence drift slower with every tick.
+        nextAt = Math.max(now, nextAt + period)
+        this.pollTimer = setTimeout(tick, nextAt - now)
       })
     }
-    this.pollTimer = setTimeout(tick, POLL_MS)
+    this.pollTimer = setTimeout(tick, 0)
   }
 
   private stopPolling(): void {
@@ -352,7 +489,9 @@ export class InverterService extends EventEmitter {
   private async pollOnce(): Promise<void> {
     const started = Date.now()
     try {
-      const buf = await this.query('QPIGS', POLL_TIMEOUT_MS)
+      const buf = await this.exchangePrimary(started)
+      if (!buf) return
+
       const decoded = decodeReply(buf)
 
       // NAK means "busy / not now" on this bridge, not a dead link. Skip the
@@ -377,45 +516,84 @@ export class InverterService extends EventEmitter {
         this.log('err', `derive failed: ${(err as Error).message}`)
       }
 
-      this.cycle++
       await this.pollSecondary()
     } catch (err) {
       this.noteFailure((err as Error).message)
     } finally {
-      this.recordDuration(Date.now() - started)
       this.pushState()
     }
   }
 
+  /**
+   * One QPIGS exchange, failing soft and timing itself.
+   *
+   * Only this exchange feeds `meanPollMs`: folding the slower configuration
+   * queries into the same number made the stat lurch every time one ran, and
+   * hid how fast the telemetry stream actually is.
+   */
+  private async exchangePrimary(started: number): Promise<Buffer | null> {
+    try {
+      return await this.query('QPIGS', POLL_TIMEOUT_MS)
+    } catch (err) {
+      this.noteFailure((err as Error).message)
+      return null
+    } finally {
+      this.recordDuration(Date.now() - started)
+    }
+  }
+
   private async pollSecondary(): Promise<void> {
-    if (this.cycle % 5 === 0) {
-      try {
-        const buf = await this.query('QMOD')
-        const d = decodeReply(buf)
-        if (d.kind !== 'nak' && d.body) this.state.mode = parseQMOD(d.body)
-      } catch (err) {
-        this.log('sys', `QMOD: ${(err as Error).message}`)
-      }
-    }
+    // While the link is struggling, spend the cycles on primary telemetry
+    // instead of piling configuration queries onto a device that is timing out.
+    if (this.state.stats.consecutiveFailures >= 2) return
 
-    if (this.cycle % 10 === 0) {
-      try {
-        const buf = await this.query('QPIWS')
-        const d = decodeReply(buf)
-        if (d.kind !== 'nak' && d.body) this.state.warnings = parseQPIWS(d.body)
-      } catch (err) {
-        this.log('sys', `QPIWS: ${(err as Error).message}`)
-      }
-    }
+    await this.runSecondary('QMOD', QUERY_TIMEOUT_MS, parseQMOD, (mode) => {
+      this.state.mode = mode
+    })
+    await this.runSecondary('QPIWS', QUERY_TIMEOUT_MS, parseQPIWS, (warnings) => {
+      this.state.warnings = warnings
+    })
+    await this.runSecondary('QPIRI', SETTINGS_TIMEOUT_MS, parseQPIRI, (settings) => {
+      this.state.settings = settings
+    })
+  }
 
-    if (this.cycle % 60 === 0) {
-      try {
-        const buf = await this.query('QPIRI', WARMUP_TIMEOUT_MS)
-        const d = decodeReply(buf)
-        if (d.kind !== 'nak' && d.body) this.state.settings = parseQPIRI(d.body)
-      } catch (err) {
-        this.log('sys', `QPIRI: ${(err as Error).message}`)
+  /**
+   * Run one slow query if its slot has come up.
+   *
+   * The slot is claimed before awaiting, so a slow reply cannot queue a second
+   * probe behind it, and a failure pulls the next attempt forward - one dropped
+   * frame must not leave a panel blank for another full interval.
+   */
+  private async runSecondary<T>(
+    cmd: SecondaryCmd,
+    timeoutMs: number,
+    parse: (body: string) => T | null,
+    apply: (value: T) => void
+  ): Promise<void> {
+    const now = Date.now()
+    if (this.nextDue[cmd] > now) return
+    this.nextDue[cmd] = now + SECONDARY_INTERVAL_MS[cmd]
+
+    try {
+      const buf = await this.query(cmd, timeoutMs)
+      const decoded = decodeReply(buf)
+      if (decoded.kind === 'nak' || !decoded.body) {
+        this.log('sys', `${cmd}: ${decoded.kind === 'nak' ? 'NAK' : 'empty reply'}`)
+        this.nextDue[cmd] = Date.now() + SECONDARY_RETRY_MS
+        return
       }
+
+      const value = parse(decoded.body)
+      if (value === null) {
+        this.log('sys', `${cmd}: unparsable reply`)
+        this.nextDue[cmd] = Date.now() + SECONDARY_RETRY_MS
+        return
+      }
+      apply(value)
+    } catch (err) {
+      this.log('sys', `${cmd}: ${(err as Error).message}`)
+      this.nextDue[cmd] = Date.now() + SECONDARY_RETRY_MS
     }
   }
 

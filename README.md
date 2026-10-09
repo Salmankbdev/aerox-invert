@@ -132,15 +132,20 @@ chunks**. Treat that as a hint, not as confirmed fact.
 src/
   shared/
     types.ts        VENDOR_ID/PRODUCT_ID, DeviceState, Telemetry, Settings, Handshake,
-                    SendResult, IPC channel names, MODE_LABEL
+                    SettingKey, SendResult, SetSettingResult, IPC channel names, MODE_LABEL
+    settings-spec.ts SETTING_SPECS — every writable parameter, its PI30 command, its
+                    allowed values and how its argument is encoded
     api.ts          AeroxApi — the typed surface exposed to the renderer
   main/
     index.ts        BrowserWindow + IPC wiring; runs the CRC self-check before anything else
     service.ts      InverterService — connect lifecycle, handshake matrix, poll loop, mutex
     hid-channel.ts  HidChannel — hotplug monitor, quiet/flush/collect half-duplex request()
+    conflicts.ts    detectConflicts() — the vendor apps contending for the HID handle
     protocol/
       crc.ts        crcPI + CRC_VECTORS + crcPIIsValid()
       framing.ts    encodeCommand / toReport / decodeReply / toHex / toPrintable
+      setters.ts    buildSettingCommand — validates a value and produces the exact
+                    setter string ("POP" + "02", "PCVV" + "14.4")
       parsers.ts    parseQPIGS / parseQPIRI / parseQMOD / parseQPIWS / parseProtocolId /
                     parseFirmware / parseString, WARNING_BITS
   preload/index.ts  contextBridge → window.aerox
@@ -183,11 +188,25 @@ setConnection('ready') → startPolling()
 every 1000ms : QPIGS  (primary telemetry)
  every 5s    : QMOD   (operating mode)
  every 10s   : QPIWS  (fault / warning bits)
- every 60s   : QPIRI  (configuration snapshot)
+ every 30s   : QPIRI  (configuration snapshot)
 ```
 
-5 consecutive poll failures → `fail()` → close → `absent`/`error`, hotplug scanner picks it
-back up when the device reappears.
+Both cadences are **wall-clock deadlines**, not cycle counters, and the next tick is anchored
+relatively to the previous deadline - so the poll rate cannot drift by however long the
+exchange took, and a dropped poll cannot postpone the Settings snapshot. The three slow
+queries are all due on the first cycle, so the dashboard (Settings included) is complete
+within a second or two of connect instead of a minute.
+
+5 consecutive *primary* poll failures → `fail()` → close → `absent`/`error`. The hotplug
+scanner picks the device back up with exponential backoff (2 s doubling to 30 s), and a real
+unplug resets that backoff so a fresh plug-in reconnects immediately. A failing slow query
+never counts toward the give-up total; it just pulls its own next attempt forward to 4 s.
+
+While a link is unhealthy (`consecutiveFailures >= 2`) the slow queries are skipped entirely
+so every cycle goes to primary telemetry. `conflicts.ts` also polls `tasklist` every 15 s for
+WatchPower / SolarPower and surfaces them in state and in the UI banner - Windows lets both
+processes hold the HID handle at once, so the vendor app does not fail loudly, it
+just interleaves commands and makes replies time out.
 
 ---
 
@@ -258,7 +277,50 @@ strings for zero-padded enums — e.g. `machineType` arrives as `"01"`, not `1`.
 
 `QPI` (protocol ID → returns `(PI30`), `QPIGS`, `QPIRI`, `QMOD`, `QPIWS`, `QVFW`, `QID`,
 `QMN`, `QDI`, `QFLAG`. The handshake also tries the legacy `QS` / `QGS` / `Q` for the
-older "voltronic-qs" dialect.
+older "voltronic-qs" dialect. Writes use `POP` / `PCP` / `PGR` / `PBT` / `PCVV` / `PBFT` /
+`PBCV` / `PSDV` / `PBDV` / `MCHGC` / `MUCHGC` / `F` and `PSAVE` - see below.
+
+### Writing settings
+
+The dashboard's **Configuration** panel writes these parameters. The verbs,
+argument widths and allowed values come from mpp-solar's `protocols/pi30.py` (same
+provenance as the read field maps); the whole table lives in `src/shared/settings-spec.ts`
+so the UI and the encoder cannot drift apart:
+
+| key | command | argument | allowed values |
+| --- | --- | --- | --- |
+| outputSourcePriority | `POP` | `dd` | 00 utility / 01 solar / 02 SBU |
+| chargerSourcePriority | `PCP` | `dd` | 00 utility / 01 solar / 02 solar+utility / 03 solar only |
+| inputVoltageRange | `PGR` | `dd` | 00 appliance / 01 UPS |
+| batteryType | `PBT` | `dd` | 00 AGM / 01 flooded / 02 user (**only these three**) |
+| batteryBulkChargeVoltage | `PCVV` | `dd.d` | 12.0 - 14.6 V |
+| batteryFloatChargeVoltage | `PBFT` | `dd.d` | 12.0 - 14.6 V |
+| batteryRechargeVoltage | `PBCV` | `dd.d` | 11.0 - 12.8 V ladder |
+| batteryUnderVoltage | `PSDV` | `dd.d` | 10.0 - 12.0 V |
+| batteryRedischargeVoltage | `PBDV` | `dd.d` | 00.0 (full) or 11.0 - 14.5 V |
+| maxChargingCurrent | `MCHGC` | `ddd` | 10 - 120 A in tens |
+| maxAcChargingCurrent | `MUCHGC` | `ddd` | 2 A, then 10 - 120 A in tens |
+| outputFrequency | `F` | none | `50` or `60` |
+
+`command + argument` are concatenated with no separator, so the exact bytes matter:
+`POP02`, `PCVV14.4`, `MCHGC060`, `F60`. A wrong width is not close enough - the firmware
+answers `(NAK`.
+
+The flow is: renderer sends `{ key, value }` over `IPC.setSetting` →
+`buildSettingCommand()` validates the range **and** the allowed-value list in the main
+process → the command goes out through the same mutex as the poll loop (half-duplex, one
+command in flight) → on `(ACK` the service re-reads `QPIRI` so the panel shows what the
+device actually accepted rather than what was requested. `(NAK` is reported inline and in
+the console log; an out-of-range value is rejected before anything is sent.
+
+Writes are immediate. Some units only keep them across a power cycle after `PSAVE`, which
+the panel exposes as **save to EEPROM**.
+
+> The allowed-value ladders above are the **12 V unit** figures from the protocol notes.
+> They have not yet been confirmed against this firmware, so a value the unit dislikes
+> shows up as a NAK rather than silently succeeding. The editor also never guesses:
+> each control is preselected from the `QPIRI` snapshot, and `batteryType` values the
+> inverter reports but `PBT` cannot express (Pylontech, WECO, ...) leave the control blank.
 
 ---
 
@@ -276,6 +338,8 @@ older "voltronic-qs" dialect.
   `protocol_helpers.py`.
 - Full Electron app scaffolded and **typechecking + building clean**:
   main process service, sandboxed preload, dashboard renderer, standalone probe.
+- Poll loop hardened: wall-clock scheduling for both the primary and the slow queries,
+  immediate priming of Settings, reconnect backoff, and vendor-app conflict detection.
 
 ### Blocked / unverified — this is the work
 
@@ -288,8 +352,11 @@ older "voltronic-qs" dialect.
 3. **HID report descriptor is unknown.** node-hid 3.4.0 has no `getReportDescriptor()`.
    `OutputReportByteLength` is therefore unknown — hidapi pads for us, so this is
    probably not blocking, but confirm if writes come back short.
-4. **Is WatchPower / SolarPower installed on this machine?** It may hold an exclusive
-   claim on the HID handle and would explain a silent link.
+4. **Is WatchPower / SolarPower installed on this machine?** — **Yes.** WatchPower *is*
+   installed at `C:\Users\Salman\WatchPower` and was observed **running** (PID 1476) during
+   diagnosis on 2026-10-09. It is the prime suspect for an unstable or silent link. Close it
+   before probing; the app now detects it and warns in the UI. Still unconfirmed: whether it
+   holds the handle exclusively or merely interleaves traffic.
 5. **Live validation of every parser** — QPIGS field alignment, QPIWS bit table, QPIRI
    25-vs-27 field split — has only been checked against captured strings, never against
    a running unit.
@@ -304,7 +371,9 @@ older "voltronic-qs" dialect.
 3. If the probe answers nothing: check Task Manager for WatchPower/SolarPower, try a
    different USB cable/port, retry. Do not start rewriting the transport.
 4. Once the link works, run `npm run dev` and verify the dashboard fills in — telemetry
-   tiles, status flags, settings table, mode, warnings.
+   tiles, status flags, settings table, mode, warnings. The Configuration panel should be
+   populated within a second or two of connect (QPIRI is primed on the first poll cycle),
+   not a minute later.
 5. Validate parsers against the real reply strings and fix `parsers.ts` where the
    captured data disagrees. Update the field maps in this README if the firmware turns
    out to place a field differently.

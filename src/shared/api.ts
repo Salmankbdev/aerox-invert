@@ -1,4 +1,12 @@
-import type { BatteryConfig, DeviceState, LogLine, SendRequest, SendResult } from './types'
+import type {
+  BatteryConfig,
+  DeviceState,
+  LogLine,
+  SendRequest,
+  SendResult,
+  SetSettingRequest,
+  SetSettingResult
+} from './types'
 
 export interface InitialPayload {
   state: DeviceState
@@ -10,6 +18,7 @@ export interface InitialPayload {
 export interface AeroxApi {
   getState(): Promise<InitialPayload>
   send(req: SendRequest): Promise<SendResult>
+  setSetting(req: SetSettingRequest): Promise<SetSettingResult>
   configureBattery(cfg: Partial<BatteryConfig>): Promise<BatteryConfig>
   resetAnalytics(): Promise<boolean>
   onState(cb: (state: DeviceState) => void): () => void

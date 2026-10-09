@@ -28,3 +28,6 @@ desktop.ini
 # environment
 .env
 .env.*
+
+# agent workspace metadata
+.freebuff/

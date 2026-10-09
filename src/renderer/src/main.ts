@@ -5,12 +5,14 @@ import type {
   DeviceState,
   HistoryPoint,
   LogLine,
+  SettingKey,
   Settings,
   Status2Flags,
   StatusFlags,
   Telemetry
 } from '@shared/types'
 import { MODE_LABEL } from '@shared/types'
+import { SETTING_SPECS, type SettingSpec } from '@shared/settings-spec'
 
 const app = document.getElementById('app')
 
@@ -30,6 +32,8 @@ app.innerHTML = `
   </div>
   <div class="meta" id="meta">waiting for device</div>
 </header>
+
+<div class="notice" id="notice" hidden></div>
 
 <main>
   <section class="hero">
@@ -153,7 +157,7 @@ app.innerHTML = `
 
   <section class="row row--split">
     <div class="panel">
-      <h3>Settings</h3>
+      <h3>Settings <span class="panel__hint" id="settings-hint">—</span></h3>
       <dl class="grid" id="settings"></dl>
     </div>
     <div class="panel panel--console">
@@ -163,6 +167,20 @@ app.innerHTML = `
         <input id="cmd" placeholder="type a command, e.g. QPIGS" autocomplete="off" spellcheck="false" />
         <button type="submit">send</button>
       </form>
+    </div>
+  </section>
+
+  <section class="row">
+    <div class="panel">
+      <h3>Configuration <span class="panel__hint" id="config-hint">waiting for device</span></h3>
+      <div class="config" id="config"></div>
+      <p class="config__note">
+        A write goes to the inverter immediately. Some units only keep it across a power cycle
+        once it has been saved to EEPROM.
+      </p>
+      <div class="actions">
+        <button type="button" id="btn-eeprom" class="btn">save to EEPROM</button>
+      </div>
     </div>
   </section>
 </main>
@@ -308,6 +326,190 @@ function renderSettings(s: Settings): void {
     setText(`[data-set="${row.label}"]`, value === null || value === undefined ? '—' : String(value))
   }
 }
+
+// ------------------------------------------------------------- configuration
+
+interface ConfigRow {
+  spec: SettingSpec
+  readout: HTMLElement
+  input: HTMLSelectElement | HTMLInputElement
+  command: HTMLElement
+  result: HTMLElement
+  apply: HTMLButtonElement
+}
+
+const configHost = $('#config')
+const eepromButton = $('#btn-eeprom') as HTMLButtonElement
+const configRows = new Map<SettingKey, ConfigRow>()
+/** Edited but not yet written - a poll must not clobber a half-made change. */
+const dirtySettings = new Set<SettingKey>()
+
+/** Where each writable parameter's current value lives in a QPIRI snapshot. */
+const CURRENT_VALUE: Record<SettingKey, (s: Settings) => { value: number | null; label: string }> = {
+  outputSourcePriority: (s) => ({
+    value: s.outputSourcePriorityIndex,
+    label: s.outputSourcePriority ?? '—'
+  }),
+  chargerSourcePriority: (s) => ({
+    value: s.chargerSourcePriorityIndex,
+    label: s.chargerSourcePriority ?? '—'
+  }),
+  inputVoltageRange: (s) => ({ value: s.inputVoltageRangeIndex, label: s.inputVoltageRange ?? '—' }),
+  batteryType: (s) => ({ value: s.batteryTypeIndex, label: s.batteryType ?? '—' }),
+  batteryBulkChargeVoltage: (s) => ({
+    value: s.batteryBulkChargeVoltage,
+    label: `${num(s.batteryBulkChargeVoltage)} V`
+  }),
+  batteryFloatChargeVoltage: (s) => ({
+    value: s.batteryFloatChargeVoltage,
+    label: `${num(s.batteryFloatChargeVoltage)} V`
+  }),
+  batteryRechargeVoltage: (s) => ({
+    value: s.batteryRechargeVoltage,
+    label: `${num(s.batteryRechargeVoltage)} V`
+  }),
+  batteryUnderVoltage: (s) => ({ value: s.batteryUnderVoltage, label: `${num(s.batteryUnderVoltage)} V` }),
+  batteryRedischargeVoltage: (s) => ({
+    value: s.batteryRedischargeVoltage,
+    label: `${num(s.batteryRedischargeVoltage)} V`
+  }),
+  maxChargingCurrent: (s) => ({ value: s.maxChargingCurrent, label: `${int(s.maxChargingCurrent)} A` }),
+  maxAcChargingCurrent: (s) => ({
+    value: s.maxAcChargingCurrent,
+    label: `${int(s.maxAcChargingCurrent)} A`
+  }),
+  outputFrequency: (s) => ({
+    value: s.acOutputFrequency === null ? null : Math.round(s.acOutputFrequency / 10) * 10,
+    label: `${num(s.acOutputFrequency)} Hz`
+  })
+}
+
+function buildConfigRows(): void {
+  for (const spec of SETTING_SPECS) {
+    const row = document.createElement('div')
+    row.className = 'config__row'
+
+    const meta = document.createElement('div')
+    meta.className = 'config__meta'
+    const label = document.createElement('dt')
+    label.textContent = spec.label
+    const readout = document.createElement('dd')
+    readout.textContent = '—'
+    meta.append(label, readout)
+
+    const field = document.createElement('div')
+    field.className = 'config__field'
+
+    let input: HTMLSelectElement | HTMLInputElement
+    if (spec.kind === 'select' && spec.options) {
+      const select = document.createElement('select')
+      for (const option of spec.options) {
+        const el = document.createElement('option')
+        el.value = String(option.value)
+        el.textContent = option.label
+        select.appendChild(el)
+      }
+      input = select
+    } else {
+      const number = document.createElement('input')
+      number.type = 'number'
+      number.min = String(spec.min)
+      number.max = String(spec.max)
+      number.step = String(spec.step)
+      input = number
+    }
+    input.disabled = true
+    input.addEventListener('input', () => {
+      dirtySettings.add(spec.key)
+      updateCommandPreview(spec.key)
+    })
+
+    const command = document.createElement('code')
+    command.className = 'config__cmd'
+
+    const apply = document.createElement('button')
+    apply.type = 'button'
+    apply.className = 'btn btn--apply'
+    apply.textContent = 'apply'
+    apply.disabled = true
+    apply.addEventListener('click', () => void applySetting(spec))
+
+    const result = document.createElement('span')
+    result.className = 'config__result'
+
+    field.append(input, apply, command, result)
+
+    const help = document.createElement('p')
+    help.className = 'config__help'
+    help.textContent = spec.help
+
+    row.append(meta, field, help)
+    configHost.appendChild(row)
+    configRows.set(spec.key, { spec, readout, input, command, result, apply })
+  }
+}
+
+function updateCommandPreview(key: SettingKey): void {
+  const row = configRows.get(key)
+  if (!row) return
+  const raw = row.input.value
+  const value = Number(raw)
+  row.command.textContent =
+    raw === '' || !Number.isFinite(value) ? '—' : `${row.spec.command}${row.spec.encode(value)}`
+}
+
+async function applySetting(spec: SettingSpec): Promise<void> {
+  const row = configRows.get(spec.key)
+  if (!row) return
+
+  const raw = row.input.value
+  const value = Number(raw)
+  if (raw === '' || !Number.isFinite(value)) {
+    row.result.textContent = 'enter a value'
+    row.result.dataset.tone = 'err'
+    return
+  }
+
+  row.apply.disabled = true
+  row.result.dataset.tone = ''
+  row.result.textContent = 'sending…'
+
+  try {
+    const result = await window.aerox.setSetting({ key: spec.key, value })
+    row.result.textContent = result.ok ? `✓ ${result.command}` : `✗ ${result.error ?? 'rejected'}`
+    row.result.dataset.tone = result.ok ? 'ok' : 'err'
+    if (result.ok) dirtySettings.delete(spec.key)
+    appendLog({
+      at: Date.now(),
+      kind: result.ok ? 'tx' : 'err',
+      text: `${result.command || spec.key} → ${result.rx ?? result.error ?? 'no reply'}`
+    })
+  } catch (err) {
+    row.result.textContent = `✗ ${String(err)}`
+    row.result.dataset.tone = 'err'
+  } finally {
+    row.apply.disabled = lastConnection !== 'ready'
+  }
+}
+
+function renderConfiguration(state: DeviceState): void {
+  const ready = state.connection === 'ready'
+  const settings = state.settings
+  setText('#config-hint', ready ? (settings ? 'read from device' : 'reading…') : 'waiting for device')
+  eepromButton.disabled = !ready
+
+  for (const [key, row] of configRows) {
+    row.input.disabled = !ready
+    row.apply.disabled = !ready
+
+    const current = settings ? CURRENT_VALUE[key](settings) : { value: null, label: '—' }
+    row.readout.textContent = current.label
+    if (current.value !== null && !dirtySettings.has(key)) row.input.value = String(current.value)
+    updateCommandPreview(key)
+  }
+}
+
+buildConfigRows()
 
 // ------------------------------------------------------------- derived panels
 
@@ -555,9 +757,27 @@ const CONNECTION_LABEL: Record<string, string> = {
   error: 'error'
 }
 
+// Ages are re-rendered on their own clock: state only arrives while the link is
+// healthy, so a frozen "updated 3s ago" was the last thing the UI showed when
+// the device dropped - exactly when the age matters most.
+let lastConnection = 'absent'
+let lastTelemetryAt: number | null = null
+let lastSettingsAt: number | null = null
+
+function refreshHints(): void {
+  setText('#stale', lastTelemetryAt ? `updated ${when(lastTelemetryAt)}` : '—')
+  const hint = $('#settings-hint')
+  if (lastSettingsAt) hint.textContent = `updated ${when(lastSettingsAt)}`
+  else if (lastConnection === 'ready') hint.textContent = 'loading…'
+  else hint.textContent = '—'
+}
+
+window.setInterval(refreshHints, 1000)
+
 function renderState(state: DeviceState): void {
   try {
     currentMode = state.mode
+    lastConnection = state.connection
 
     const pill = $('#pill-connection')
     pill.textContent = CONNECTION_LABEL[state.connection] ?? state.connection
@@ -579,16 +799,31 @@ function renderState(state: DeviceState): void {
     if (state.stats.lastFailure) meta.push(`last error: ${state.stats.lastFailure}`)
     setText('#meta', meta.join(' · '))
 
+    const notice = $('#notice')
+    if (state.conflicts.length) {
+      notice.textContent = `${state.conflicts.join(', ')} is running and can take the USB device from this app. Close it for a stable link.`
+      notice.hidden = false
+    } else {
+      notice.hidden = true
+    }
+
     if (state.telemetry) {
       renderTelemetry(state.telemetry)
-      setText('#stale', `updated ${when(state.telemetry.at)}`)
+      lastTelemetryAt = state.telemetry.at
     }
 
     if (state.derived) renderDerived(state.derived)
 
-    if (state.settings) renderSettings(state.settings)
+    if (state.settings) {
+      lastSettingsAt = state.settings.at
+      renderSettings(state.settings)
+    }
+
+    renderConfiguration(state)
 
     setText('#mode', state.mode ? (MODE_LABEL[state.mode] ?? state.mode) : '—')
+
+    refreshHints()
 
     const warnings = $('#warnings')
     if (!state.warnings || state.warnings.active.length === 0) {
@@ -643,22 +878,24 @@ $('#cmd-form').addEventListener('submit', (event) => {
     .catch((err: unknown) => appendLog({ at: Date.now(), kind: 'err', text: String(err) }))
 })
 
+$('#btn-eeprom').addEventListener('click', () => {
+  void window.aerox
+    .send({ command: 'PSAVE' })
+    .then((result) => {
+      appendLog({
+        at: Date.now(),
+        kind: result.ok ? 'tx' : 'err',
+        text: `PSAVE → ${result.rx ?? result.error ?? 'no reply'}${result.crcValid === false ? ' [crc mismatch]' : ''}`
+      })
+    })
+    .catch((err: unknown) => appendLog({ at: Date.now(), kind: 'err', text: String(err) }))
+})
+
 $('#btn-reset').addEventListener('click', () => {
   void window.aerox
     .resetAnalytics()
     .then(() => appendLog({ at: Date.now(), kind: 'sys', text: 'analytics counters reset' }))
     .catch((err: unknown) => appendLog({ at: Date.now(), kind: 'err', text: String(err) }))
-})
-
-// Redraw the canvases when the window resizes - the backing store is
-// device-pixel-ratio sized, so a resize would otherwise leave them blurry.
-let resizeTimer: number | undefined
-window.addEventListener('resize', () => {
-  window.clearTimeout(resizeTimer)
-  resizeTimer = window.setTimeout(() => {
-    const last = app!.querySelector('#stale')
-    void last // charts re-draw on the next state push; nothing to force here
-  }, 150)
 })
 
 async function boot(): Promise<void> {

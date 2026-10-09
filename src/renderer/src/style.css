@@ -127,6 +127,19 @@ body {
 
 /* ---------- layout ---------- */
 
+/* Relies on the UA [hidden] { display: none } rule - no display property here,
+   so toggling the attribute really does hide it. */
+.notice {
+  margin: 16px 22px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--fault);
+  background: color-mix(in srgb, var(--fault) 16%, var(--bg-raised));
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 main {
   display: flex;
   flex-direction: column;
@@ -485,6 +498,115 @@ main {
 
 .cmd button:hover {
   background: color-mix(in srgb, var(--batt) 38%, var(--bg-tile));
+}
+
+/* ---------- configuration ---------- */
+
+.config {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 10px;
+}
+
+.config__row {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-tile);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.config__meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config__meta dt {
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.config__meta dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.config__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.config__field select,
+.config__field input {
+  flex: 1 1 130px;
+  min-width: 120px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.config__field select:disabled,
+.config__field input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn--apply {
+  border-color: color-mix(in srgb, var(--batt) 60%, transparent);
+  color: var(--text);
+}
+
+.btn--apply:hover {
+  color: var(--text);
+  border-color: var(--batt);
+  background: color-mix(in srgb, var(--batt) 22%, var(--bg-tile));
+}
+
+.config__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--batt);
+  letter-spacing: 0.04em;
+}
+
+.config__result {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.config__result[data-tone='ok'] {
+  color: var(--ok);
+}
+
+.config__result[data-tone='err'] {
+  color: var(--fault);
+}
+
+.config__help,
+.config__note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.config__note {
+  margin-top: 12px;
 }
 
 /* ---------- analytics: battery health ---------- */

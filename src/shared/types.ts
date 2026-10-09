@@ -5,6 +5,24 @@ export type Connection = 'absent' | 'connecting' | 'handshaking' | 'ready' | 'er
 export type WriteMode = 'report' | 'feature'
 export type Dialect = 'pi30' | 'voltronic-qs' | 'unknown'
 
+/**
+ * Writable inverter parameters. Each maps to one PI30 setter command -
+ * see src/shared/settings-spec.ts for the command, ranges and encoding.
+ */
+export type SettingKey =
+  | 'outputSourcePriority'
+  | 'chargerSourcePriority'
+  | 'inputVoltageRange'
+  | 'batteryType'
+  | 'batteryBulkChargeVoltage'
+  | 'batteryFloatChargeVoltage'
+  | 'batteryRechargeVoltage'
+  | 'batteryUnderVoltage'
+  | 'batteryRedischargeVoltage'
+  | 'maxChargingCurrent'
+  | 'maxAcChargingCurrent'
+  | 'outputFrequency'
+
 export interface DeviceInfo {
   path: string
   vendorId: number
@@ -120,11 +138,16 @@ export interface Settings {
   batteryBulkChargeVoltage: number | null
   batteryFloatChargeVoltage: number | null
   batteryType: string | null
+  /** Raw enum indices as the inverter sent them, for preselecting the editor. */
+  batteryTypeIndex: number | null
   maxAcChargingCurrent: number | null
   maxChargingCurrent: number | null
   inputVoltageRange: string | null
+  inputVoltageRangeIndex: number | null
   outputSourcePriority: string | null
+  outputSourcePriorityIndex: number | null
   chargerSourcePriority: string | null
+  chargerSourcePriorityIndex: number | null
   maxParallelUnits: number | null
   machineType: string | null
   outputMode: string | null
@@ -179,6 +202,12 @@ export interface DeviceState {
    */
   derived: DerivedState | null
   stats: LinkStats
+  /**
+   * Vendor apps (WatchPower / SolarPower) that are running and contend for the
+   * same HID bridge. Surfaced so the UI can say why the link is flaky instead
+   * of leaving the user to guess.
+   */
+  conflicts: string[]
 }
 
 export interface LogLine {
@@ -307,6 +336,7 @@ export const IPC = {
   log: 'inv:log',
   getState: 'inv:get-state',
   send: 'inv:send',
+  setSetting: 'inv:set-setting',
   configureBattery: 'inv:configure-battery',
   resetAnalytics: 'inv:reset-analytics'
 } as const
@@ -321,4 +351,18 @@ export interface SendResult {
   rx: string | null
   error: string | null
   crcValid: boolean | null
+}
+
+export interface SetSettingRequest {
+  key: SettingKey
+  value: number
+}
+
+export interface SetSettingResult {
+  ok: boolean
+  key: SettingKey
+  /** The exact command that went on the wire, e.g. `POP02`. */
+  command: string
+  rx: string | null
+  error: string | null
 }

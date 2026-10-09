@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
-import { IPC, type BatteryConfig, type LogLine, type SendRequest } from '@shared/types'
+import { IPC, type BatteryConfig, type LogLine, type SendRequest, type SetSettingRequest } from '@shared/types'
 import { crcPIIsValid } from './protocol/crc'
 import { installProcessLogging, initLogging, logPath, writeLog } from './logger'
 import { InverterService } from './service'
@@ -90,6 +90,10 @@ app.whenReady().then(() => {
   }))
 
   ipcMain.handle(IPC.send, (_event, req: SendRequest) => service.sendCommand(req.command))
+
+  ipcMain.handle(IPC.setSetting, (_event, req: SetSettingRequest) =>
+    service.writeSetting(req.key, req.value)
+  )
 
   ipcMain.handle(IPC.configureBattery, (_event, cfg: Partial<BatteryConfig>) => {
     service.configureBattery(cfg)
