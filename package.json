@@ -1,0 +1,56 @@
+{
+  "name": "aerox-monitor",
+  "version": "0.1.0",
+  "description": "Desktop monitor for the Inverex Aerox MPPT solar inverter (Voltronic PI30 over Cypress USB-HID)",
+  "author": "aerox",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "rebuild": "electron-rebuild -f -w node-hid",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "probe": "node scripts/probe.mjs",
+    "probe:quick": "node scripts/probe.mjs --quick"
+  },
+  "dependencies": {
+    "node-hid": "^3.4.0"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.2.1",
+    "@types/node": "^26.6.4",
+    "electron": "^44.7.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7"
+  },
+  "build": {
+    "appId": "pk.inverex.aerox.monitor",
+    "productName": "Aerox Monitor",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-hid/**"
+    ],
+    "npmRebuild": true,
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# dependencies
+node_modules/
+
+# build output
+out/
+release/
+dist/
+
+# electron-vite / vite cache
+.vite/
+*.vite
+
+# typescript
+*.tsbuildinfo
+
+# logs
+*.log
+npm-debug.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# environment
+.env
+.env.*
